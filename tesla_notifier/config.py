@@ -59,7 +59,39 @@ class Config:
         """解析 MQTT 端口"""
         url = self.mqtt_url.replace("mqtt://", "").replace("mqtts://", "")
         parts = url.split(":")
-        return int(parts[1]) if len(parts) > 1 else 1883
+        try:
+            return int(parts[1]) if len(parts) > 1 else 1883
+        except ValueError:
+            return 1883
+
+    def validate(self) -> list[str]:
+        """验证配置，返回错误列表
+
+        在应用启动时调用，检查必需的配置项是否已正确设置。
+        """
+        errors: list[str] = []
+
+        # 如果启用了 MQTT，检查 MQTT 配置
+        if self.mqtt_enabled:
+            if not self.mqtt_url:
+                errors.append("MQTT_URL 未配置（ENABLE_MQTT=true 时必需）")
+
+        # 如果启用了定时任务，检查 cron 表达式格式
+        if self.cron_enabled:
+            for name, expr in [
+                ("DAILY_CRON", self.daily_cron),
+                ("WEEKLY_CRON", self.weekly_cron),
+                ("MONTHLY_CRON", self.monthly_cron),
+            ]:
+                parts = expr.split()
+                if len(parts) != 5:
+                    errors.append(f"{name} 格式错误: 需要 5 个字段，实际 {len(parts)} 个")
+
+        # Bark 推送密钥是必需的
+        if not self.bark_key:
+            errors.append("BARK_KEY 未配置（必需）")
+
+        return errors
 
 
 config = Config()

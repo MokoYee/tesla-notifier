@@ -4,11 +4,17 @@ import asyncio
 import signal
 import sys
 
+from dotenv import load_dotenv
+
+# 加载 .env 文件（必须在导入 config 之前）
+load_dotenv()
+
 from tesla_notifier import bark, database
 from tesla_notifier.config import config
 from tesla_notifier.logger import setup_logger
 from tesla_notifier.mqtt_handler import MqttHandler
 from tesla_notifier.scheduler import Scheduler
+from tesla_notifier.state import push_state
 from tesla_notifier.weather import generate_weather_suggestion, get_weather
 
 logger = setup_logger("main")
@@ -16,111 +22,167 @@ logger = setup_logger("main")
 # 全局状态
 mqtt_handler: MqttHandler | None = None
 scheduler: Scheduler | None = None
-pushed_trips: set[int] = set()
-pushed_charges: set[int] = set()
+_shutdown_event: asyncio.Event | None = None
 
 
 async def handle_trip_end() -> None:
-    """处理行程结束"""
+    """处理行程结束（带重试机制）
+
+    由于 MQTT 事件触发后 TeslaMate 可能还未完成数据库写入，
+    采用重试机制确保能获取到完整的行程数据。
+
+    能耗计算使用 cars.efficiency 动态值，比固定 150 Wh/km 更准确。
+    """
     logger.info("========== 检测到行程结束 ==========")
 
-    try:
-        trip = await database.get_latest_trip(config.car_id)
+    max_retries = 3
+    retry_delay = 5.0  # 秒
 
-        if not trip:
-            logger.warning("未找到最新行程数据")
-            return
+    for attempt in range(1, max_retries + 1):
+        try:
+            trip = await database.get_latest_trip(config.car_id)
 
-        # 去重检查
-        if trip.id in pushed_trips:
-            logger.info(f"该行程已推送过，跳过: {trip.id}")
-            return
+            # 检查行程数据是否就绪（end_date 不为空表示行程已完成）
+            if not trip or not trip.end_date:
+                if attempt < max_retries:
+                    logger.info(
+                        f"行程数据未就绪，{retry_delay}秒后重试 ({attempt}/{max_retries})"
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                else:
+                    logger.warning("行程数据获取失败，已达最大重试次数")
+                    return
 
-        # 短行程过滤
-        if trip.distance < config.min_trip_distance:
-            logger.info(
-                f"行程距离过短，跳过推送: {trip.distance:.1f} km < {config.min_trip_distance} km"
+            # 去重检查
+            if push_state.is_trip_pushed(trip.id):
+                logger.info(f"该行程已推送过，跳过: {trip.id}")
+                return
+
+            # 短行程过滤
+            if trip.distance < config.min_trip_distance:
+                logger.info(
+                    f"行程距离过短，跳过推送: {trip.distance:.1f} km < {config.min_trip_distance} km"
+                )
+                return
+
+            logger.info(f"准备推送行程数据: id={trip.id}, distance={trip.distance:.1f} km")
+
+            # 获取车辆动态 efficiency 值
+            car_efficiency = await database.get_car_efficiency(config.car_id)
+
+            # 计算能耗和效率（使用动态 efficiency，处理负值）
+            rated_range_used = max(trip.start_rated_range_km - trip.end_rated_range_km, 0)
+            energy_used = (rated_range_used * car_efficiency) / 1000.0  # kWh
+            efficiency = (rated_range_used * car_efficiency) / trip.distance if trip.distance > 0 else 0  # Wh/km
+
+            # 获取驾驶评分
+            score = await database.get_trip_driving_score(trip.id)
+
+            success = await bark.send_trip_end(
+                start_address=trip.start_address,
+                end_address=trip.end_address,
+                start_time=trip.start_date,
+                end_time=trip.end_date,
+                distance=trip.distance,
+                duration=trip.duration_min,
+                energy_used=energy_used,
+                efficiency=efficiency,
+                start_range=trip.start_rated_range_km,
+                end_range=trip.end_rated_range_km,
+                start_soc=trip.start_battery_level,
+                end_soc=trip.end_battery_level,
+                outside_temp=trip.outside_temp_avg,
+                hard_accel_count=score.hard_accel_count if score else None,
+                hard_brake_count=score.hard_brake_count if score else None,
+                driving_grade=score.grade if score else None,
+                speed_avg=trip.speed_avg,
+                speed_max=trip.speed_max,
+                odometer=trip.odometer,
             )
-            return
 
-        logger.info(f"准备推送行程数据: id={trip.id}, distance={trip.distance:.1f} km")
+            if success:
+                push_state.mark_trip_pushed(trip.id)
+                logger.info(f"行程推送成功: {trip.id}")
+            else:
+                logger.error(f"行程推送失败: {trip.id}")
 
-        # 计算能耗和效率
-        energy_used = (trip.start_rated_range_km - trip.end_rated_range_km) * 0.15
-        efficiency = (energy_used * 1000) / trip.distance if trip.distance > 0 else 0
+            return  # 成功处理，退出重试循环
 
-        # 获取驾驶评分
-        score = await database.get_trip_driving_score(trip.id)
-
-        success = await bark.send_trip_end(
-            start_address=trip.start_address,
-            end_address=trip.end_address,
-            start_time=trip.start_date,
-            end_time=trip.end_date,
-            distance=trip.distance,
-            duration=trip.duration_min,
-            energy_used=energy_used,
-            efficiency=efficiency,
-            start_range=trip.start_rated_range_km,
-            end_range=trip.end_rated_range_km,
-            start_soc=trip.start_battery_level,
-            end_soc=trip.end_battery_level,
-            outside_temp=trip.outside_temp_avg,
-            hard_accel_pct=score.hard_accel_pct if score else None,
-            hard_brake_pct=score.hard_brake_pct if score else None,
-            driving_grade=score.grade if score else None,
-        )
-
-        if success:
-            pushed_trips.add(trip.id)
-            logger.info(f"行程推送成功: {trip.id}")
-        else:
-            logger.error(f"行程推送失败: {trip.id}")
-
-    except Exception as e:
-        logger.exception(f"处理行程结束异常: {e}")
+        except Exception as e:
+            logger.exception(f"处理行程结束异常: {e}")
+            if attempt < max_retries:
+                logger.info(f"发生异常，{retry_delay}秒后重试 ({attempt}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("处理行程结束失败，已达最大重试次数")
 
 
 async def handle_charging_complete() -> None:
-    """处理充电完成"""
+    """处理充电完成（带重试机制）
+
+    由于 MQTT 事件触发后 TeslaMate 可能还未完成数据库写入，
+    采用重试机制确保能获取到完整的充电数据。
+    """
     logger.info("========== 检测到充电完成 ==========")
 
-    try:
-        charging = await database.get_latest_charging(config.car_id)
+    max_retries = 3
+    retry_delay = 5.0  # 秒
 
-        if not charging:
-            logger.warning("未找到最新充电记录")
-            return
+    for attempt in range(1, max_retries + 1):
+        try:
+            charging = await database.get_latest_charging(config.car_id)
 
-        # 去重检查
-        if charging.id in pushed_charges:
-            logger.info(f"该充电记录已推送过，跳过: {charging.id}")
-            return
+            # 检查充电数据是否就绪
+            if not charging or not charging.end_date:
+                if attempt < max_retries:
+                    logger.info(
+                        f"充电数据未就绪，{retry_delay}秒后重试 ({attempt}/{max_retries})"
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                else:
+                    logger.warning("充电数据获取失败，已达最大重试次数")
+                    return
 
-        logger.info(f"准备推送充电数据: id={charging.id}, energy={charging.charge_energy_added:.1f} kWh")
+            # 去重检查
+            if push_state.is_charge_pushed(charging.id):
+                logger.info(f"该充电记录已推送过，跳过: {charging.id}")
+                return
 
-        success = await bark.send_charging_complete(
-            location=charging.location,
-            start_time=charging.start_date,
-            end_time=charging.end_date,
-            duration=charging.duration_min,
-            start_soc=charging.start_battery_level,
-            end_soc=charging.end_battery_level,
-            energy_added=charging.charge_energy_added,
-            peak_power=charging.charger_power_max,
-            start_range=charging.start_rated_range_km,
-            end_range=charging.end_rated_range_km,
-            outside_temp=charging.outside_temp_avg,
-        )
+            logger.info(
+                f"准备推送充电数据: id={charging.id}, energy={charging.charge_energy_added:.1f} kWh"
+            )
 
-        if success:
-            pushed_charges.add(charging.id)
-            logger.info(f"充电推送成功: {charging.id}")
-        else:
-            logger.error(f"充电推送失败: {charging.id}")
+            success = await bark.send_charging_complete(
+                location=charging.location,
+                start_time=charging.start_date,
+                end_time=charging.end_date,
+                duration=charging.duration_min,
+                start_soc=charging.start_battery_level,
+                end_soc=charging.end_battery_level,
+                energy_added=charging.charge_energy_added,
+                peak_power=charging.charger_power_max,
+                start_range=charging.start_rated_range_km,
+                end_range=charging.end_rated_range_km,
+                outside_temp=charging.outside_temp_avg,
+            )
 
-    except Exception as e:
-        logger.exception(f"处理充电完成异常: {e}")
+            if success:
+                push_state.mark_charge_pushed(charging.id)
+                logger.info(f"充电推送成功: {charging.id}")
+            else:
+                logger.error(f"充电推送失败: {charging.id}")
+
+            return  # 成功处理，退出重试循环
+
+        except Exception as e:
+            logger.exception(f"处理充电完成异常: {e}")
+            if attempt < max_retries:
+                logger.info(f"发生异常，{retry_delay}秒后重试 ({attempt}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("处理充电完成失败，已达最大重试次数")
 
 
 async def send_daily_briefing_task() -> None:
@@ -172,8 +234,8 @@ async def send_daily_briefing_task() -> None:
             yesterday_trips=yesterday.total_trips if yesterday else None,
             yesterday_distance=yesterday.total_distance if yesterday else None,
             yesterday_efficiency=yesterday.avg_efficiency if yesterday else None,
-            hard_accel_pct=score.hard_accel_pct if score else None,
-            hard_brake_pct=score.hard_brake_pct if score else None,
+            hard_accel_count=score.hard_accel_count if score else None,
+            hard_brake_count=score.hard_brake_count if score else None,
             driving_grade=score.grade if score else None,
             suggestion=suggestion,
         )
@@ -293,6 +355,15 @@ async def run() -> None:
     global mqtt_handler, scheduler
 
     logger.info("========== Tesla Notifier 启动 ==========")
+
+    # 配置验证
+    errors = config.validate()
+    if errors:
+        for err in errors:
+            logger.error(f"配置错误: {err}")
+        logger.error("请检查配置后重新启动")
+        sys.exit(1)
+
     logger.info(f"配置信息:")
     logger.info(f"  ENABLE_CRON: {config.cron_enabled}")
     logger.info(f"  ENABLE_MQTT: {config.mqtt_enabled}")
@@ -304,6 +375,9 @@ async def run() -> None:
     logger.info(f"  MQTT_URL: {config.mqtt_url if config.mqtt_enabled else '(未启用)'}")
     logger.info(f"  BARK_KEY: {'(已配置)' if config.bark_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
+
+    # 初始化数据库连接池
+    await database.init_pool()
 
     loop = asyncio.get_event_loop()
 
@@ -335,16 +409,23 @@ async def run() -> None:
 
     logger.info("========== Tesla Notifier 启动完成 ==========")
 
-    # 保持运行
+    # 初始化退出事件
+    global _shutdown_event
+    _shutdown_event = asyncio.Event()
+
+    # 等待退出信号
     try:
-        while True:
-            await asyncio.sleep(1)
+        await _shutdown_event.wait()
     except asyncio.CancelledError:
         pass
+    finally:
+        # 确保异步资源被清理
+        shutdown()
+        await shutdown_async()
 
 
 def shutdown() -> None:
-    """关闭服务"""
+    """关闭服务（同步部分）"""
     global mqtt_handler, scheduler
 
     logger.info("========== 正在停止服务 ==========")
@@ -355,16 +436,23 @@ def shutdown() -> None:
     if mqtt_handler:
         mqtt_handler.disconnect()
 
+
+async def shutdown_async() -> None:
+    """关闭服务（异步部分）"""
+    # 关闭数据库连接池
+    await database.close_pool()
     logger.info("========== 服务已停止 ==========")
 
 
 def main() -> None:
     """主入口"""
-    # 信号处理
+
     def signal_handler(sig: int, frame: object) -> None:
+        """信号处理器"""
         logger.info(f"收到信号 {sig}，准备退出...")
-        shutdown()
-        sys.exit(0)
+        # 通过设置事件触发优雅退出
+        if _shutdown_event is not None:
+            _shutdown_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -372,7 +460,8 @@ def main() -> None:
     try:
         asyncio.run(run())
     except KeyboardInterrupt:
-        shutdown()
+        # 如果 asyncio.run 被中断，确保清理
+        logger.info("收到键盘中断，退出...")
 
 
 if __name__ == "__main__":

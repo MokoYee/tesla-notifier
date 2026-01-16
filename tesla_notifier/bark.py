@@ -1,5 +1,6 @@
 """Bark 推送通知客户端"""
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Literal
@@ -10,6 +11,10 @@ from tesla_notifier.config import config
 from tesla_notifier.logger import log_with_data, setup_logger
 
 logger = setup_logger("bark")
+
+# 重试配置
+MAX_RETRIES = 3  # 最大重试次数
+RETRY_DELAY = 2  # 重试间隔（秒）
 
 
 @dataclass
@@ -27,7 +32,10 @@ class BarkOptions:
 
 
 async def send_notification(options: BarkOptions) -> bool:
-    """发送 Bark 推送"""
+    """发送 Bark 推送（带重试机制）
+
+    网络异常时自动重试，最多重试 3 次
+    """
     if not config.bark_key:
         logger.warning("BARK_KEY 未配置，跳过推送")
         return False
@@ -56,31 +64,46 @@ async def send_notification(options: BarkOptions) -> bool:
         {"title": options.title, "group": options.group, "body_length": len(options.body)},
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=payload)
+    last_error: Exception | None = None
 
-            if response.status_code != 200:
-                log_with_data(
-                    logger,
-                    logging.ERROR,
-                    f"推送失败: HTTP {response.status_code}",
-                    {"status_text": response.text},
-                )
-                return False
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json=payload)
 
-            result = response.json()
+                if response.status_code != 200:
+                    log_with_data(
+                        logger,
+                        logging.ERROR,
+                        f"推送失败: HTTP {response.status_code}",
+                        {"status_text": response.text},
+                    )
+                    return False
 
-            if result.get("code") == 200:
-                logger.info("推送成功")
-                return True
+                result = response.json()
+
+                if result.get("code") == 200:
+                    logger.info("推送成功")
+                    return True
+                else:
+                    log_with_data(logger, logging.ERROR, "推送返回错误", result)
+                    return False
+
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+            # 网络相关异常，进行重试
+            last_error = e
+            if attempt < MAX_RETRIES:
+                logger.warning(f"推送失败（第{attempt}次），{RETRY_DELAY}秒后重试: {e}")
+                await asyncio.sleep(RETRY_DELAY)
             else:
-                log_with_data(logger, logging.ERROR, "推送返回错误", result)
-                return False
+                logger.error(f"推送失败，已重试{MAX_RETRIES}次: {e}")
 
-    except Exception as e:
-        logger.exception(f"推送异常: {e}")
-        return False
+        except Exception as e:
+            # 其他异常，不重试
+            logger.exception(f"推送异常: {e}")
+            return False
+
+    return False
 
 
 async def send_trip_end(
@@ -97,16 +120,23 @@ async def send_trip_end(
     start_soc: int,
     end_soc: int,
     outside_temp: float | None = None,
-    hard_accel_pct: float | None = None,
-    hard_brake_pct: float | None = None,
+    hard_accel_count: int | None = None,
+    hard_brake_count: int | None = None,
     driving_grade: str | None = None,
+    speed_avg: float | None = None,
+    speed_max: float | None = None,
+    odometer: float | None = None,
 ) -> bool:
     """发送行程结束推送"""
     from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(config.timezone)
 
     def format_time(iso_string: str) -> str:
         dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
-        return dt.strftime("%H:%M")
+        local_dt = dt.astimezone(tz)
+        return local_dt.strftime("%H:%M")
 
     def format_duration(minutes: float) -> str:
         hours = int(minutes // 60)
@@ -120,23 +150,33 @@ async def send_trip_end(
 
     lines = [
         "━━━━━━━━━━━━━━━━",
-        f"📍 {start_address}",
-        f"   → {end_address}",
+        f"📍 {start_address} → {end_address}",
         "",
         f"🕐 {format_time(start_time)} - {format_time(end_time)} ({format_duration(duration)})",
         f"📏 里程: {distance:.1f} km",
+    ]
+
+    # 速度信息
+    if speed_avg is not None and speed_max is not None:
+        lines.append(f"🚀 均速 {speed_avg:.1f} km/h · 最高 {speed_max:.1f} km/h")
+
+    lines.extend([
         f"⚡ 净能耗: {energy_used:.1f} kWh",
         f"📊 效率: {efficiency:.0f} Wh/km",
         "",
         f"🔋 SoC: {start_soc}% → {end_soc}% ({soc_sign}{soc_diff}%)",
-        f"📱 表显: {start_range:.0f} → {end_range:.0f} km",
-    ]
+        f"📟 表显: {start_range:.0f} → {end_range:.0f} km",
+    ])
+
+    # 总里程
+    if odometer is not None:
+        lines.append(f"🛣️ 总里程: {odometer:.1f} km")
 
     if outside_temp is not None:
         lines.append(f"🌡️ 室外: {outside_temp:.1f}°C")
 
-    if hard_accel_pct is not None and hard_brake_pct is not None and driving_grade is not None:
-        lines.append(f"🏁 驾驶评分: {hard_accel_pct:.1f}%急加速 · {hard_brake_pct:.1f}%急减速（{driving_grade}）")
+    if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
+        lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
 
     lines.append("━━━━━━━━━━━━━━━━")
 
@@ -220,8 +260,8 @@ async def send_monthly_report(
     total_distance: float,
     avg_efficiency: float,
     longest_trip: float,
-    hard_accel_pct: float | None = None,
-    hard_brake_pct: float | None = None,
+    hard_accel_count: int | None = None,
+    hard_brake_count: int | None = None,
     driving_grade: str | None = None,
 ) -> bool:
     """发送月报"""
@@ -234,8 +274,8 @@ async def send_monthly_report(
         f"🏆 最长行程: {longest_trip:.1f} km",
     ]
 
-    if hard_accel_pct is not None and hard_brake_pct is not None and driving_grade is not None:
-        lines.append(f"🏁 驾驶评分: {hard_accel_pct:.1f}%急加速 · {hard_brake_pct:.1f}%急减速（{driving_grade}）")
+    if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
+        lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
 
     return await send_notification(
         BarkOptions(title="🚗 Tesla 月报", body="\n".join(lines), group="tesla-monthly")
@@ -252,8 +292,8 @@ async def send_daily_briefing(
     yesterday_trips: int | None = None,
     yesterday_distance: float | None = None,
     yesterday_efficiency: float | None = None,
-    hard_accel_pct: float | None = None,
-    hard_brake_pct: float | None = None,
+    hard_accel_count: int | None = None,
+    hard_brake_count: int | None = None,
     driving_grade: str | None = None,
     suggestion: str | None = None,
 ) -> bool:
@@ -275,8 +315,8 @@ async def send_daily_briefing(
             f"🚗 {yesterday_trips} 次行程，{yesterday_distance:.1f} km",
             f"⚡ 平均能耗: {yesterday_efficiency:.0f} Wh/km",
         ])
-        if hard_accel_pct is not None and hard_brake_pct is not None and driving_grade is not None:
-            lines.append(f"🏁 驾驶评分: {hard_accel_pct:.1f}%急加速 · {hard_brake_pct:.1f}%急减速（评分{driving_grade}）")
+        if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
+            lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
 
     if suggestion:
         lines.extend(["", "💡 今日建议", suggestion])
