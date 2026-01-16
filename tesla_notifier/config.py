@@ -34,6 +34,9 @@ class Config:
     # 天气服务
     caiyun_token: str = field(default_factory=lambda: os.getenv("CAIYUN_TOKEN", ""))
 
+    # 高德地图
+    amap_key: str = field(default_factory=lambda: os.getenv("AMAP_KEY", ""))
+
     # 车辆
     car_id: str = field(default_factory=lambda: os.getenv("CAR_ID", "1"))
     min_trip_distance: float = field(

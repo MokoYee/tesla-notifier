@@ -141,7 +141,8 @@ async def resolve_location_name(
     优先级：
     1. geofence_id 关联的收藏地点名称
     2. 根据 position_id 的经纬度实时匹配 geofence（在半径范围内）
-    3. 地址名称 address_name
+    3. 通过高德地图 API 获取中文地址（如果配置了 AMAP_KEY）
+    4. 地址名称 address_name（兜底）
 
     Args:
         conn: 数据库连接
@@ -152,6 +153,8 @@ async def resolve_location_name(
     Returns:
         解析后的位置名称
     """
+    from tesla_notifier import amap
+
     async with conn.cursor() as cur:
         # 1. 优先使用已关联的 geofence 名称
         if geofence_id:
@@ -164,16 +167,19 @@ async def resolve_location_name(
                 return row[0]
 
         # 2. 根据 position_id 的经纬度实时匹配 geofence
+        latitude: float | None = None
+        longitude: float | None = None
+
         if position_id:
             await cur.execute(
                 """
-                SELECT g.name
-                FROM geofences g, positions p
+                SELECT g.name, p.latitude, p.longitude
+                FROM positions p
+                LEFT JOIN geofences g ON earth_box(ll_to_earth(g.latitude, g.longitude), g.radius)
+                    @> ll_to_earth(p.latitude, p.longitude)
+                    AND earth_distance(ll_to_earth(g.latitude, g.longitude),
+                                       ll_to_earth(p.latitude, p.longitude)) < g.radius
                 WHERE p.id = %s
-                  AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius)
-                      @> ll_to_earth(p.latitude, p.longitude)
-                  AND earth_distance(ll_to_earth(g.latitude, g.longitude),
-                                     ll_to_earth(p.latitude, p.longitude)) < g.radius
                 ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude),
                                         ll_to_earth(p.latitude, p.longitude)) ASC
                 LIMIT 1
@@ -181,10 +187,21 @@ async def resolve_location_name(
                 (position_id,),
             )
             row = await cur.fetchone()
-            if row and row[0]:
-                return row[0]
+            if row:
+                # 如果匹配到 geofence，直接返回
+                if row[0]:
+                    return row[0]
+                # 保存坐标用于高德 API 查询
+                latitude = float(row[1]) if row[1] else None
+                longitude = float(row[2]) if row[2] else None
 
-        # 3. 使用地址名称
+        # 3. 通过高德地图 API 获取中文地址
+        if latitude and longitude:
+            amap_address = await amap.reverse_geocode(latitude, longitude)
+            if amap_address:
+                return amap_address
+
+        # 4. 使用原始地址名称（兜底）
         return address_name or "未知地点"
 
 

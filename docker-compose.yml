@@ -30,9 +30,13 @@ services:
       # 天气服务（可选，不配置则使用免费的 Open-Meteo）
       # - CAIYUN_TOKEN=your_caiyun_token
 
+      # 高德地图
+      # - AMAP_KEY=your_amap_key
+
       # 车辆配置
       - CAR_ID=1
-      - MIN_TRIP_DISTANCE=1       # 最小行程距离(km)，过滤短行程
+      # 最小行程距离(km)，过滤短行程
+      - MIN_TRIP_DISTANCE=1
 
       # 时区
       - TZ=Asia/Shanghai

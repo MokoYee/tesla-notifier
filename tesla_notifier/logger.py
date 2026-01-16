@@ -1,39 +1,44 @@
 """日志工具"""
 
-import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
+
+from tesla_notifier.config import config
 
 
-class JsonFormatter(logging.Formatter):
-    """JSON 格式日志"""
+class SimpleFormatter(logging.Formatter):
+    """简洁日志格式：时间 级别 模块 - 消息"""
 
     def format(self, record: logging.LogRecord) -> str:
-        log_entry = {
-            "time": datetime.now(timezone.utc).isoformat(),
-            "level": record.levelname,
-            "module": record.name,
-            "msg": record.getMessage(),
-        }
+        # 使用配置的时区
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(config.timezone)
+        now = datetime.now(tz)
+        time_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
+        # 格式：2026-01-16 15:17:21 INFO [main] - 消息内容
+        base_msg = f"{time_str} {record.levelname:<5} [{record.name}] - {record.getMessage()}"
 
+        # 如果有附加数据，追加到消息后面
         if hasattr(record, "data") and record.data:
-            log_entry["data"] = record.data
+            base_msg += f" | {record.data}"
 
-        return json.dumps(log_entry, ensure_ascii=False)
+        # 如果有异常信息，追加堆栈
+        if record.exc_info:
+            base_msg += f"\n{self.formatException(record.exc_info)}"
+
+        return base_msg
 
 
 def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
-    """创建 JSON 格式日志器"""
+    """创建日志器"""
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(JsonFormatter())
+        handler.setFormatter(SimpleFormatter())
         logger.addHandler(handler)
 
     return logger

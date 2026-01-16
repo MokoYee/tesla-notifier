@@ -1,13 +1,27 @@
 # Tesla Notifier
 
-TeslaMate 推送通知服务 - 独立部署的轻量级推送服务。
+TeslaMate 推送通知服务 - 独立部署的轻量级推送服务，通过 [Bark](https://bark.day.app/) 将车辆状态实时推送到 iOS 设备。
 
 ## 功能
 
-- **行程结束推送** - 通过 MQTT 监听车辆状态，行程结束后自动推送
-- **充电完成推送** - 充电完成后自动推送充电详情
-- **每日简报** - 每天早上推送天气和昨日驾驶汇总
-- **周报/月报** - 定时推送驾驶统计报告
+### 实时推送（MQTT 驱动）
+
+- **行程结束推送** - 行程结束后自动推送详情（起终点、里程、能耗、效率、驾驶评分）
+- **充电完成推送** - 充电完成后推送充电详情（充入电量、峰值功率、费用）
+- **哨兵模式推送** - 哨兵模式激活/关闭/事件触发时推送
+
+### 定时报告（Cron 驱动）
+
+- **每日简报** - 每天早上推送天气预报 + 昨日驾驶汇总 + 驾驶评分
+- **周报** - 每周一推送本周驾驶统计
+- **月报** - 每月1日推送上月驾驶统计 + 驾驶评分
+
+### 驾驶评分
+
+基于功率数据分析驾驶习惯：
+- 急加速次数（power ≥ 100kW）
+- 急减速次数（power ≤ -55kW）
+- 评分等级：A/B/C/D
 
 ## 快速开始
 
@@ -57,6 +71,7 @@ python -m tesla_notifier.main
 | `BARK_URL` | Bark 服务地址 | https://api.day.app |
 | `BARK_KEY` | Bark 推送 Key | - |
 | `CAIYUN_TOKEN` | 彩云天气 Token（可选） | - |
+| `AMAP_KEY` | 高德地图 Key（可选） | - |
 | `CAR_ID` | 车辆 ID | 1 |
 | `MIN_TRIP_DISTANCE` | 最小行程距离(km) | 1 |
 | `TZ` | 时区 | Asia/Shanghai |
@@ -74,7 +89,19 @@ networks:
 ## 天气服务
 
 - **彩云天气**（推荐）- 配置 `CAIYUN_TOKEN` 后使用，支持空气质量、紫外线等数据
-- **Open-Meteo**（备用）- 免费，无需配置，自动回退
+  - [申请 Token](https://platform.caiyunapp.com/)
+  - [API 文档](https://docs.caiyunapp.com/weather-api/v2/v2.6/1-realtime.html)
+- **Open-Meteo**（备用）- 免费，无需配置，彩云失败时自动回退
+
+## 架构
+
+```
+Tesla API → TeslaMate → PostgreSQL
+                ↓
+            MQTT Broker
+                ↓
+          Tesla Notifier → Bark → iOS
+```
 
 ## 许可证
 
