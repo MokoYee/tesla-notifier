@@ -374,6 +374,8 @@ async def run() -> None:
     logger.info(f"  MIN_TRIP_DISTANCE: {config.min_trip_distance}")
     logger.info(f"  MQTT_URL: {config.mqtt_url if config.mqtt_enabled else '(未启用)'}")
     logger.info(f"  BARK_KEY: {'(已配置)' if config.bark_key else '(未配置)'}")
+    logger.info(f"  CAIYUN_TOKEN: {'(已配置)' if config.caiyun_token else '(未配置)'}")
+    logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
 
     # 初始化数据库连接池
@@ -416,52 +418,86 @@ async def run() -> None:
     # 等待退出信号
     try:
         await _shutdown_event.wait()
+        logger.info("收到退出信号，开始清理...")
     except asyncio.CancelledError:
-        pass
+        logger.info("任务被取消，开始清理...")
     finally:
-        # 确保异步资源被清理
-        shutdown()
-        await shutdown_async()
+        # 确保资源被清理
+        await cleanup()
 
 
-def shutdown() -> None:
-    """关闭服务（同步部分）"""
+async def cleanup() -> None:
+    """清理所有资源（统一的清理函数）"""
     global mqtt_handler, scheduler
 
     logger.info("========== 正在停止服务 ==========")
 
+    # 停止定时任务
     if scheduler:
-        scheduler.stop()
+        try:
+            scheduler.stop()
+        except Exception as e:
+            logger.error(f"停止定时任务失败: {e}")
 
+    # 断开 MQTT 连接
     if mqtt_handler:
-        mqtt_handler.disconnect()
+        try:
+            mqtt_handler.disconnect()
+        except Exception as e:
+            logger.error(f"断开 MQTT 连接失败: {e}")
+
+    # 关闭数据库连接池
+    try:
+        await database.close_pool()
+    except Exception as e:
+        logger.error(f"关闭数据库连接池失败: {e}")
+
+    logger.info("========== 服务已停止 ==========")
+
+
+def shutdown() -> None:
+    """关闭服务（同步部分）- 已废弃，使用 cleanup() 代替"""
+    pass
 
 
 async def shutdown_async() -> None:
-    """关闭服务（异步部分）"""
-    # 关闭数据库连接池
-    await database.close_pool()
-    logger.info("========== 服务已停止 ==========")
+    """关闭服务（异步部分）- 已废弃，使用 cleanup() 代替"""
+    pass
 
 
 def main() -> None:
     """主入口"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-    def signal_handler(sig: int, frame: object) -> None:
+    def signal_handler(sig: int, _frame: object) -> None:
         """信号处理器"""
         logger.info(f"收到信号 {sig}，准备退出...")
-        # 通过设置事件触发优雅退出
-        if _shutdown_event is not None:
-            _shutdown_event.set()
+        # 在事件循环中设置退出事件
+        if _shutdown_event is not None and loop.is_running():
+            loop.call_soon_threadsafe(_shutdown_event.set)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        asyncio.run(run())
+        loop.run_until_complete(run())
     except KeyboardInterrupt:
-        # 如果 asyncio.run 被中断，确保清理
+        # 如果被中断，确保清理
         logger.info("收到键盘中断，退出...")
+    finally:
+        # 清理事件循环
+        try:
+            # 取消所有未完成的任务
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            # 等待所有任务取消完成
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
+        finally:
+            loop.close()
 
 
 if __name__ == "__main__":

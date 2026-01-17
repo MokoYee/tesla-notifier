@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,65 @@ logger = setup_logger("database")
 
 # 全局连接池（延迟初始化）
 _pool: AsyncConnectionPool | None = None
+
+
+def _format_utc_time(dt: datetime | None) -> str:
+    """将数据库返回的 naive datetime 转换为 UTC ISO 格式字符串
+
+    TeslaMate 数据库存储的 timestamp 类型没有时区信息，但实际是 UTC 时间。
+    需要手动添加 UTC 时区标记，以便后续正确转换到本地时区。
+
+    Args:
+        dt: 数据库返回的 datetime 对象（无时区信息）
+
+    Returns:
+        ISO 格式字符串，带 +00:00 时区标记，如 "2026-01-16T00:08:47.893000+00:00"
+    """
+    if not dt:
+        return ""
+    # 将 naive datetime 标记为 UTC 时区
+    utc_dt = dt.replace(tzinfo=timezone.utc)
+    return utc_dt.isoformat()
+
+
+def _local_to_utc(local_dt: datetime) -> datetime:
+    """将本地时区的 datetime 转换为 UTC naive datetime（用于数据库查询）
+
+    TeslaMate 数据库存储的是 UTC 时间（无时区信息），所以查询时需要将本地时间转换为 UTC。
+
+    Args:
+        local_dt: 带时区信息的本地 datetime
+
+    Returns:
+        UTC 时间的 naive datetime（无时区信息），可直接用于数据库查询
+    """
+    # 转换为 UTC 时间
+    utc_dt = local_dt.astimezone(timezone.utc)
+    # 移除时区信息，返回 naive datetime
+    return utc_dt.replace(tzinfo=None)
+
+
+def _get_local_date_range(date_str: str, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """获取某个本地日期对应的 UTC 时间范围（用于数据库查询）
+
+    例如：本地日期 "2026-01-17" (Asia/Shanghai) 对应的 UTC 时间范围是
+    2026-01-16 16:00:00 到 2026-01-17 16:00:00
+
+    Args:
+        date_str: 本地日期字符串，格式 "YYYY-MM-DD"
+        tz: 时区信息
+
+    Returns:
+        (start_utc, end_utc) 元组，都是 naive datetime（无时区信息）
+    """
+    # 解析本地日期（当天 00:00:00）
+    local_date = datetime.strptime(date_str, "%Y-%m-%d")
+    local_start = local_date.replace(tzinfo=tz)
+    # 当天结束时间（次日 00:00:00）
+    local_end = local_start + timedelta(days=1)
+
+    # 转换为 UTC naive datetime
+    return _local_to_utc(local_start), _local_to_utc(local_end)
 
 
 @dataclass
@@ -262,8 +321,8 @@ async def get_latest_trip(car_id: str) -> TripData | None:
                 return TripData(
                     id=row[0],
                     car_id=row[1],
-                    start_date=row[2].isoformat() if row[2] else "",
-                    end_date=row[3].isoformat() if row[3] else "",
+                    start_date=_format_utc_time(row[2]),
+                    end_date=_format_utc_time(row[3]),
                     start_address=start_address,
                     end_address=end_address,
                     distance=float(row[4] or 0),
@@ -326,8 +385,8 @@ async def get_latest_charging(car_id: str) -> ChargingData | None:
                 return ChargingData(
                     id=row[0],
                     car_id=row[1],
-                    start_date=row[2].isoformat() if row[2] else "",
-                    end_date=row[3].isoformat() if row[3] else "",
+                    start_date=_format_utc_time(row[2]),
+                    end_date=_format_utc_time(row[3]),
                     location=location,
                     duration_min=float(row[4] or 0),
                     start_battery_level=int(row[5] or 0),
@@ -352,6 +411,9 @@ async def get_yesterday_summary(car_id: str) -> DrivingSummary | None:
                 yesterday = datetime.now(tz) - timedelta(days=1)
                 date_str = yesterday.strftime("%Y-%m-%d")
 
+                # 获取昨日本地时间对应的 UTC 时间范围
+                start_utc, end_utc = _get_local_date_range(date_str, tz)
+
                 await cur.execute(
                     """
                     SELECT
@@ -362,11 +424,12 @@ async def get_yesterday_summary(car_id: str) -> DrivingSummary | None:
                     FROM drives d
                     JOIN cars c ON d.car_id = c.id
                     WHERE d.car_id = %s
-                        AND DATE(d.start_date) = %s
+                        AND d.start_date >= %s
+                        AND d.start_date < %s
                         AND d.end_date IS NOT NULL
                     GROUP BY c.efficiency
                     """,
-                    (car_id, date_str),
+                    (car_id, start_utc, end_utc),
                 )
                 row = await cur.fetchone()
 
@@ -395,13 +458,18 @@ async def get_yesterday_summary(car_id: str) -> DrivingSummary | None:
 
 
 async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
-    """获取周驾驶汇总"""
+    """获取周驾驶汇总（最近7天）"""
     try:
         async with get_connection() as conn:
             async with conn.cursor() as cur:
                 tz = ZoneInfo(config.timezone)
-                end_date = datetime.now(tz).replace(tzinfo=None)
-                start_date = end_date - timedelta(days=7)
+                # 本地时间的当前时刻和7天前
+                local_end = datetime.now(tz)
+                local_start = local_end - timedelta(days=7)
+
+                # 转换为 UTC naive datetime（用于数据库查询）
+                start_utc = _local_to_utc(local_start)
+                end_utc = _local_to_utc(local_end)
 
                 await cur.execute(
                     """
@@ -418,7 +486,7 @@ async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
                         AND d.end_date IS NOT NULL
                     GROUP BY c.efficiency
                     """,
-                    (car_id, start_date, end_date),
+                    (car_id, start_utc, end_utc),
                 )
                 row = await cur.fetchone()
 
@@ -447,17 +515,25 @@ async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
 
 
 async def get_monthly_summary(car_id: str) -> DrivingSummary | None:
-    """获取月驾驶汇总"""
+    """获取月驾驶汇总（上个自然月）"""
     try:
         async with get_connection() as conn:
             async with conn.cursor() as cur:
                 tz = ZoneInfo(config.timezone)
                 now = datetime.now(tz)
-                end_date = datetime(now.year, now.month, 1)
+
+                # 计算上个月的起止时间（本地时区）
+                # 本月1号 00:00:00
+                local_end = datetime(now.year, now.month, 1, tzinfo=tz)
+                # 上个月1号 00:00:00
                 if now.month == 1:
-                    start_date = datetime(now.year - 1, 12, 1)
+                    local_start = datetime(now.year - 1, 12, 1, tzinfo=tz)
                 else:
-                    start_date = datetime(now.year, now.month - 1, 1)
+                    local_start = datetime(now.year, now.month - 1, 1, tzinfo=tz)
+
+                # 转换为 UTC naive datetime（用于数据库查询）
+                start_utc = _local_to_utc(local_start)
+                end_utc = _local_to_utc(local_end)
 
                 await cur.execute(
                     """
@@ -475,7 +551,7 @@ async def get_monthly_summary(car_id: str) -> DrivingSummary | None:
                         AND d.end_date IS NOT NULL
                     GROUP BY c.efficiency
                     """,
-                    (car_id, start_date, end_date),
+                    (car_id, start_utc, end_utc),
                 )
                 row = await cur.fetchone()
 
@@ -507,8 +583,9 @@ async def get_monthly_summary(car_id: str) -> DrivingSummary | None:
 async def get_car_efficiency(car_id: str) -> float:
     """获取车辆的 efficiency 值（Wh/km）
 
-    TeslaMate 根据充电数据动态校准此值，比固定 150 更准确。
-    如果查询失败或值为空，返回默认值 150.0。
+    TeslaMate 数据库存储的 efficiency 单位是 kWh/km，
+    需要乘以 1000 转换为 Wh/km。
+    如果查询失败或值为空，返回默认值 150.0 Wh/km。
     """
     try:
         async with get_connection() as conn:
@@ -520,7 +597,8 @@ async def get_car_efficiency(car_id: str) -> float:
                 row = await cur.fetchone()
 
                 if row and row[0]:
-                    return float(row[0])
+                    # 数据库单位是 kWh/km，转换为 Wh/km
+                    return float(row[0]) * 1000.0
                 return 150.0  # 默认值
     except Exception as e:
         logger.exception(f"查询车辆 efficiency 失败: {e}")
@@ -617,10 +695,18 @@ async def get_daily_driving_score(car_id: str, date_str: str) -> DrivingScore | 
     阈值定义:
         急加速: power >= 100kW
         急减速: power <= -55kW
+
+    Args:
+        car_id: 车辆 ID
+        date_str: 本地日期字符串，格式 "YYYY-MM-DD"
     """
     try:
         async with get_connection() as conn:
             async with conn.cursor() as cur:
+                tz = ZoneInfo(config.timezone)
+                # 获取本地日期对应的 UTC 时间范围
+                start_utc, end_utc = _get_local_date_range(date_str, tz)
+
                 await cur.execute(
                     """
                     SELECT
@@ -629,10 +715,11 @@ async def get_daily_driving_score(car_id: str, date_str: str) -> DrivingScore | 
                     FROM positions p
                     JOIN drives d ON p.drive_id = d.id
                     WHERE d.car_id = %s
-                        AND DATE(d.start_date) = %s
+                        AND d.start_date >= %s
+                        AND d.start_date < %s
                         AND p.power IS NOT NULL
                     """,
-                    (car_id, date_str),
+                    (car_id, start_utc, end_utc),
                 )
                 row = await cur.fetchone()
 

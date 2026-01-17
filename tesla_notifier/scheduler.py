@@ -59,8 +59,12 @@ class Scheduler:
 
     def stop(self) -> None:
         """停止调度器"""
-        self._scheduler.shutdown()
-        logger.info("定时任务调度器已停止")
+        if self._scheduler.running:
+            logger.info("正在停止定时任务调度器...")
+            self._scheduler.shutdown(wait=False)  # 不等待任务完成，立即停止
+            logger.info("定时任务调度器已停止")
+        else:
+            logger.info("定时任务调度器未运行，无需停止")
 
     @property
     def is_running(self) -> bool:
