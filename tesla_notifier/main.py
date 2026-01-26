@@ -28,30 +28,31 @@ _shutdown_event: asyncio.Event | None = None
 async def handle_trip_end() -> None:
     """处理行程结束（带重试机制）
 
-    由于 MQTT 事件触发后 TeslaMate 可能还未完成数据库写入，
-    采用重试机制确保能获取到完整的行程数据。
+    使用 state-based 检测后，TeslaMate 已确认行程结束并写入数据库，
+    只需少量重试即可获取完整数据。
 
     能耗计算使用 cars.efficiency 动态值，比固定 150 Wh/km 更准确。
     """
     logger.info("========== 检测到行程结束 ==========")
 
-    max_retries = 3
-    retry_delay = 5.0  # 秒
+    max_retries = 2  # state-based 检测后数据应该已就绪
+    retry_delay = 2.0  # 缩短重试间隔
 
     for attempt in range(1, max_retries + 1):
         try:
+            logger.info(f"尝试获取行程数据 (第 {attempt}/{max_retries} 次)")
             trip = await database.get_latest_trip(config.car_id)
 
             # 检查行程数据是否就绪（end_date 不为空表示行程已完成）
             if not trip or not trip.end_date:
                 if attempt < max_retries:
-                    logger.info(
-                        f"行程数据未就绪，{retry_delay}秒后重试 ({attempt}/{max_retries})"
+                    logger.warning(
+                        f"行程数据未就绪 (trip={'存在' if trip else '不存在'}, end_date={trip.end_date if trip else 'N/A'})，{retry_delay}秒后重试"
                     )
                     await asyncio.sleep(retry_delay)
                     continue
                 else:
-                    logger.warning("行程数据获取失败，已达最大重试次数")
+                    logger.error("行程数据获取失败，已达最大重试次数")
                     return
 
             # 去重检查
@@ -195,9 +196,14 @@ async def send_daily_briefing_task() -> None:
         weather = None
 
         if position:
-            latitude, longitude = position
+            position_id, latitude, longitude = position
             weather = await get_weather(latitude, longitude)
-            location = f"{latitude:.4f}, {longitude:.4f}"
+
+            # 使用 resolve_location_name 解析地址（优先级：geofence > 实时匹配 > 高德 API）
+            async with database.get_connection() as conn:
+                location = await database.resolve_location_name(
+                    conn, None, position_id, None
+                )
 
         if not weather:
             logger.warning("无法获取天气数据，使用默认值")
@@ -264,10 +270,33 @@ async def send_weekly_report_task() -> None:
 
         logger.info(f"周报数据汇总: {summary}")
 
+        # 获取本周驾驶评分（最近7天）
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(config.timezone)
+        from datetime import datetime
+
+        # 计算最近7天的日期范围
+        local_end = datetime.now(tz)
+        local_start = local_end - timedelta(days=7)
+
+        # 查询这7天的驾驶评分（需要新增函数）
+        score = await database.get_weekly_driving_score(config.car_id)
+
         success = await bark.send_weekly_report(
             total_trips=summary.total_trips,
             total_distance=summary.total_distance,
             avg_efficiency=summary.avg_efficiency,
+            longest_trip=summary.longest_trip,
+            total_duration_min=summary.total_duration_min,
+            total_charging_count=summary.total_charging_count,
+            total_energy_added=summary.total_energy_added,
+            avg_speed=summary.avg_speed,
+            max_speed=summary.max_speed,
+            hard_accel_count=score.hard_accel_count if score else None,
+            hard_brake_count=score.hard_brake_count if score else None,
+            driving_grade=score.grade if score else None,
         )
 
         if success:
@@ -317,7 +346,8 @@ async def handle_sentry_activated() -> None:
     logger.info("========== 检测到哨兵模式激活 ==========")
 
     try:
-        location = mqtt_handler.get_location_str() if mqtt_handler else None
+        # 获取位置（优先地址，失败则坐标）
+        location = await mqtt_handler.get_location_str() if mqtt_handler else None
         battery_level = mqtt_handler.vehicle_state.battery_level if mqtt_handler else None
 
         success = await bark.send_sentry_activated(

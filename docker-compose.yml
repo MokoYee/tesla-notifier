@@ -26,6 +26,7 @@ services:
       # Bark 推送配置
       - BARK_URL=https://api.day.app  # 或自建 http://bark:8080
       - BARK_KEY=your_bark_key
+      # - BARK_ICON=https://your-custom-icon-url.png  # 可选，默认使用 Tesla Logo
 
       # 天气服务（可选，不配置则使用免费的 Open-Meteo）
       # - CAIYUN_TOKEN=your_caiyun_token

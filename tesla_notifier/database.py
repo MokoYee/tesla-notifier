@@ -126,6 +126,11 @@ class DrivingSummary:
     total_distance: float
     avg_efficiency: float
     longest_trip: float = 0.0
+    total_duration_min: float = 0.0  # 总驾驶时长（分钟）
+    total_charging_count: int = 0  # 充电次数
+    total_energy_added: float = 0.0  # 总充电量（kWh）
+    avg_speed: float = 0.0  # 平均速度（km/h）
+    max_speed: float = 0.0  # 最高速度（km/h）
 
 
 @dataclass
@@ -420,7 +425,7 @@ async def get_yesterday_summary(car_id: str) -> DrivingSummary | None:
                         COUNT(*) as trips,
                         COALESCE(SUM(d.distance), 0) as total_distance,
                         COALESCE(SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)), 0) as rated_range_used,
-                        c.efficiency as car_efficiency
+                        c.efficiency * 1000 as car_efficiency_wh_km
                     FROM drives d
                     JOIN cars c ON d.car_id = c.id
                     WHERE d.car_id = %s
@@ -439,7 +444,7 @@ async def get_yesterday_summary(car_id: str) -> DrivingSummary | None:
                 trips = int(row[0] or 0)
                 distance = float(row[1] or 0)
                 rated_range_used = float(row[2] or 0)
-                car_efficiency = float(row[3] or 150.0)  # 默认 150 Wh/km
+                car_efficiency = float(row[3] or 150.0)  # 单位: Wh/km，默认 150 Wh/km
 
                 if trips == 0:
                     return None
@@ -471,13 +476,17 @@ async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
                 start_utc = _local_to_utc(local_start)
                 end_utc = _local_to_utc(local_end)
 
+                # 查询行程统计
                 await cur.execute(
                     """
                     SELECT
                         COUNT(*) as trips,
                         COALESCE(SUM(d.distance), 0) as total_distance,
                         COALESCE(SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)), 0) as rated_range_used,
-                        c.efficiency as car_efficiency
+                        COALESCE(MAX(d.distance), 0) as longest_trip,
+                        COALESCE(SUM(d.duration_min), 0) as total_duration_min,
+                        COALESCE(AVG(d.speed_max), 0) as max_speed,
+                        c.efficiency * 1000 as car_efficiency_wh_km
                     FROM drives d
                     JOIN cars c ON d.car_id = c.id
                     WHERE d.car_id = %s
@@ -496,7 +505,10 @@ async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
                 trips = int(row[0] or 0)
                 distance = float(row[1] or 0)
                 rated_range_used = float(row[2] or 0)
-                car_efficiency = float(row[3] or 150.0)  # 默认 150 Wh/km
+                longest_trip = float(row[3] or 0)
+                total_duration_min = float(row[4] or 0)
+                max_speed = float(row[5] or 0)
+                car_efficiency = float(row[6] or 150.0)  # 单位: Wh/km，默认 150 Wh/km
 
                 if trips == 0:
                     return None
@@ -504,10 +516,38 @@ async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
                 # 计算效率 (Wh/km)，使用车辆动态 efficiency 值
                 efficiency = (rated_range_used * car_efficiency) / distance if distance > 0 else 0
 
+                # 计算平均速度（km/h）
+                avg_speed = (distance / (total_duration_min / 60.0)) if total_duration_min > 0 else 0
+
+                # 查询充电统计
+                await cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) as charging_count,
+                        COALESCE(SUM(charge_energy_added), 0) as total_energy_added
+                    FROM charging_processes
+                    WHERE car_id = %s
+                        AND start_date >= %s
+                        AND start_date < %s
+                        AND end_date IS NOT NULL
+                    """,
+                    (car_id, start_utc, end_utc),
+                )
+                charging_row = await cur.fetchone()
+
+                charging_count = int(charging_row[0] or 0) if charging_row else 0
+                energy_added = float(charging_row[1] or 0) if charging_row else 0
+
                 return DrivingSummary(
                     total_trips=trips,
                     total_distance=distance,
                     avg_efficiency=efficiency,
+                    longest_trip=longest_trip,
+                    total_duration_min=total_duration_min,
+                    total_charging_count=charging_count,
+                    total_energy_added=energy_added,
+                    avg_speed=avg_speed,
+                    max_speed=max_speed,
                 )
     except Exception as e:
         logger.exception(f"查询周汇总失败: {e}")
@@ -542,7 +582,7 @@ async def get_monthly_summary(car_id: str) -> DrivingSummary | None:
                         COALESCE(SUM(d.distance), 0) as total_distance,
                         COALESCE(SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)), 0) as rated_range_used,
                         COALESCE(MAX(d.distance), 0) as longest_trip,
-                        c.efficiency as car_efficiency
+                        c.efficiency * 1000 as car_efficiency_wh_km
                     FROM drives d
                     JOIN cars c ON d.car_id = c.id
                     WHERE d.car_id = %s
@@ -562,7 +602,7 @@ async def get_monthly_summary(car_id: str) -> DrivingSummary | None:
                 distance = float(row[1] or 0)
                 rated_range_used = float(row[2] or 0)
                 longest_trip = float(row[3] or 0)
-                car_efficiency = float(row[4] or 150.0)  # 默认 150 Wh/km
+                car_efficiency = float(row[4] or 150.0)  # 单位: Wh/km，默认 150 Wh/km
 
                 if trips == 0:
                     return None
@@ -605,14 +645,21 @@ async def get_car_efficiency(car_id: str) -> float:
         return 150.0
 
 
-async def get_vehicle_last_position(car_id: str) -> tuple[float, float] | None:
-    """获取车辆最后位置"""
+async def get_vehicle_last_position(car_id: str) -> tuple[int, float, float] | None:
+    """获取车辆最后位置
+
+    Returns:
+        (position_id, latitude, longitude) 或 None
+    """
     try:
         async with get_connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
-                    SELECT latitude, longitude
+                    SELECT
+                        id,
+                        latitude,
+                        longitude
                     FROM positions
                     WHERE car_id = %s
                     ORDER BY date DESC
@@ -625,7 +672,7 @@ async def get_vehicle_last_position(car_id: str) -> tuple[float, float] | None:
                 if not row:
                     return None
 
-                return (float(row[0]), float(row[1]))
+                return (int(row[0]), float(row[1]), float(row[2]))
     except Exception as e:
         logger.exception(f"查询车辆位置失败: {e}")
         return None
@@ -737,4 +784,56 @@ async def get_daily_driving_score(car_id: str, date_str: str) -> DrivingScore | 
                 )
     except Exception as e:
         logger.exception(f"查询每日驾驶评分失败: {e}")
+        return None
+
+
+async def get_weekly_driving_score(car_id: str) -> DrivingScore | None:
+    """获取本周驾驶评分（最近7天）
+
+    阈值定义:
+        急加速: power >= 100kW
+        急减速: power <= -55kW
+    """
+    try:
+        async with get_connection() as conn:
+            async with conn.cursor() as cur:
+                tz = ZoneInfo(config.timezone)
+                # 本地时间的当前时刻和7天前
+                local_end = datetime.now(tz)
+                local_start = local_end - timedelta(days=7)
+
+                # 转换为 UTC naive datetime（用于数据库查询）
+                start_utc = _local_to_utc(local_start)
+                end_utc = _local_to_utc(local_end)
+
+                await cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE p.power >= 100) as hard_accel_count,
+                        COUNT(*) FILTER (WHERE p.power <= -55) as hard_brake_count
+                    FROM positions p
+                    JOIN drives d ON p.drive_id = d.id
+                    WHERE d.car_id = %s
+                        AND d.start_date >= %s
+                        AND d.start_date < %s
+                        AND p.power IS NOT NULL
+                    """,
+                    (car_id, start_utc, end_utc),
+                )
+                row = await cur.fetchone()
+
+                if not row:
+                    return None
+
+                hard_accel_count = int(row[0] or 0)
+                hard_brake_count = int(row[1] or 0)
+                grade = _calculate_grade(hard_accel_count, hard_brake_count)
+
+                return DrivingScore(
+                    hard_accel_count=hard_accel_count,
+                    hard_brake_count=hard_brake_count,
+                    grade=grade,
+                )
+    except Exception as e:
+        logger.exception(f"查询周驾驶评分失败: {e}")
         return None

@@ -93,7 +93,7 @@ async def get_weather_from_caiyun(latitude: float, longitude: float) -> WeatherD
 
     location = f"{longitude},{latitude}"
     url = f"https://api.caiyunapp.com/v2.6/{config.caiyun_token}/{location}/weather"
-    params = {"alert": "true", "dailysteps": "1", "hourlysteps": "1"}
+    params = {"alert": "true", "dailysteps": "1"}
 
     logger.info(f"请求彩云天气 API: {location}")
 
@@ -218,3 +218,75 @@ def generate_weather_suggestion(weather: WeatherData) -> str:
         suggestions.append("紫外线较强，建议使用遮阳挡")
 
     return "；".join(suggestions) if suggestions else "天气良好，祝您出行愉快"
+
+
+def get_weather_icon(condition: str) -> str:
+    """根据天气状况返回对应的 emoji 图标
+
+    Args:
+        condition: 天气状况描述（如"晴"、"多云"、"雨"等）
+
+    Returns:
+        对应的 emoji 图标
+    """
+    # 天气状况到图标的映射
+    weather_icons = {
+        # 晴天
+        "晴": "☀️",
+        "晴朗": "☀️",
+        "晴天": "☀️",
+
+        # 多云
+        "多云": "⛅",
+        "少云": "🌤️",
+
+        # 阴天
+        "阴": "☁️",
+        "阴天": "☁️",
+
+        # 雨
+        "小雨": "🌦️",
+        "中雨": "🌧️",
+        "大雨": "🌧️",
+        "暴雨": "⛈️",
+        "阵雨": "🌦️",
+        "雷阵雨": "⛈️",
+        "雷暴": "⛈️",
+
+        # 雪
+        "小雪": "🌨️",
+        "中雪": "❄️",
+        "大雪": "❄️",
+        "暴雪": "❄️",
+        "阵雪": "🌨️",
+        "雪粒": "🌨️",
+
+        # 雾霾
+        "雾": "🌫️",
+        "雾凇": "🌫️",
+        "轻度雾霾": "😷",
+        "中度雾霾": "😷",
+        "重度雾霾": "😷",
+        "霾": "😷",
+
+        # 其他
+        "浮尘": "🌫️",
+        "沙尘": "🌫️",
+        "大风": "💨",
+        "冻雨": "🌧️",
+        "雷暴伴冰雹": "⛈️",
+    }
+
+    # 模糊匹配：如果完全匹配失败，尝试部分匹配
+    icon = weather_icons.get(condition)
+    if icon:
+        return icon
+
+    # 部分匹配
+    for key, value in weather_icons.items():
+        if key in condition or condition in key:
+            return value
+
+    # 默认图标
+    return "🌤️"
+

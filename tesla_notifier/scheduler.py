@@ -37,19 +37,34 @@ class Scheduler:
     def add_daily_task(self, func: object) -> None:
         """添加每日任务"""
         trigger = parse_cron(config.daily_cron)
-        self._daily_task = self._scheduler.add_job(func, trigger, id="daily_briefing")
+        self._daily_task = self._scheduler.add_job(
+            func,
+            trigger,
+            id="daily_briefing",
+            misfire_grace_time=None,
+        )
         logger.info(f"每日简报任务已配置: {config.daily_cron}")
 
     def add_weekly_task(self, func: object) -> None:
         """添加周报任务"""
         trigger = parse_cron(config.weekly_cron)
-        self._weekly_task = self._scheduler.add_job(func, trigger, id="weekly_report")
+        self._weekly_task = self._scheduler.add_job(
+            func,
+            trigger,
+            id="weekly_report",
+            misfire_grace_time=None,
+        )
         logger.info(f"周报任务已配置: {config.weekly_cron}")
 
     def add_monthly_task(self, func: object) -> None:
         """添加月报任务"""
         trigger = parse_cron(config.monthly_cron)
-        self._monthly_task = self._scheduler.add_job(func, trigger, id="monthly_report")
+        self._monthly_task = self._scheduler.add_job(
+            func,
+            trigger,
+            id="monthly_report",
+            misfire_grace_time=None,
+        )
         logger.info(f"月报任务已配置: {config.monthly_cron}")
 
     def start(self) -> None:

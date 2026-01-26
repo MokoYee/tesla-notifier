@@ -16,6 +16,7 @@ logger = setup_logger("mqtt")
 class VehicleState:
     """车辆状态缓存"""
 
+    state: str | None = None  # online/asleep/driving/charging
     shift_state: str | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -114,19 +115,31 @@ class MqttHandler:
         topic = msg.topic
         payload = msg.payload.decode("utf-8")
 
-        # 行程结束检测：shift_state 变为 P（停车）
+        # 行程结束检测：state 从 driving 变为 online/asleep（TeslaMate 已确认行程结束）
+        if "/state" in topic:
+            prev_state = self.vehicle_state.state
+            self.vehicle_state.state = payload
+
+            logger.debug(f"state 变化: {prev_state} -> {payload}")
+
+            # 检测行程结束：driving -> online/asleep
+            if prev_state == "driving" and payload in ("online", "asleep"):
+                logger.info(
+                    f"检测到行程结束（TeslaMate 已确认）: {prev_state} -> {payload}"
+                )
+                if self.on_trip_end and self._loop:
+                    logger.info("将在 3 秒后触发行程结束处理")
+                    asyncio.run_coroutine_threadsafe(
+                        self._delayed_trip_end_short(), self._loop
+                    )
+
+        # 保留 shift_state 监听用于调试（不再触发推送）
         if "/shift_state" in topic:
             prev_state = self.vehicle_state.shift_state
             self.vehicle_state.shift_state = payload
 
-            if prev_state and prev_state != "P" and payload == "P":
-                logger.info(f"检测到车辆停车（行程可能结束）: {prev_state} -> {payload}")
-                if self.on_trip_end and self._loop:
-                    # 延迟 5 秒再触发，等待数据库写入
-                    self._loop.call_later(
-                        5.0,
-                        lambda: asyncio.create_task(self.on_trip_end()),
-                    )
+            logger.debug(f"shift_state 变化: {prev_state} -> {payload}")
+            # 不再基于 shift_state 触发推送，仅用于调试
 
         # 充电状态检测
         if "/charging_state" in topic:
@@ -136,9 +149,9 @@ class MqttHandler:
             if prev_state == "Charging" and payload in ("Complete", "Stopped"):
                 logger.info(f"检测到充电结束: {prev_state} -> {payload}")
                 if self.on_charging_complete and self._loop:
-                    self._loop.call_later(
-                        5.0,
-                        lambda: asyncio.create_task(self.on_charging_complete()),
+                    logger.info("将在 10 秒后触发充电完成处理")
+                    asyncio.run_coroutine_threadsafe(
+                        self._delayed_charging_complete(), self._loop
                     )
 
         # 哨兵模式检测
@@ -188,11 +201,46 @@ class MqttHandler:
         """设置事件循环"""
         self._loop = loop
 
-    def get_location_str(self) -> str | None:
-        """获取当前位置字符串"""
-        if self.vehicle_state.latitude and self.vehicle_state.longitude:
-            return f"{self.vehicle_state.latitude:.4f}, {self.vehicle_state.longitude:.4f}"
-        return None
+    async def _delayed_trip_end_short(self) -> None:
+        """延迟触发行程结束处理（短延迟，因为 TeslaMate 已确认）"""
+        logger.info("等待 3 秒后触发行程结束处理...")
+        await asyncio.sleep(3.0)
+        logger.info("延迟结束，开始触发行程结束处理")
+        if self.on_trip_end:
+            await self.on_trip_end()
+
+    async def _delayed_trip_end(self) -> None:
+        """延迟触发行程结束处理（已废弃，保留用于兼容）"""
+        logger.warning("使用了已废弃的 _delayed_trip_end 方法")
+        await self._delayed_trip_end_short()
+
+    async def _delayed_charging_complete(self) -> None:
+        """延迟触发充电完成处理"""
+        logger.info("等待 10 秒后触发充电完成处理...")
+        await asyncio.sleep(10.0)
+        logger.info("延迟结束，开始触发充电完成处理")
+        if self.on_charging_complete:
+            await self.on_charging_complete()
+
+    async def get_location_str(self) -> str | None:
+        """获取当前位置字符串（优先返回地址，失败则返回坐标）"""
+        if not self.vehicle_state.latitude or not self.vehicle_state.longitude:
+            return None
+
+        # 尝试通过高德地图获取地址
+        try:
+            from tesla_notifier import amap
+            address = await amap.reverse_geocode(
+                self.vehicle_state.latitude,
+                self.vehicle_state.longitude
+            )
+            if address:
+                return address
+        except Exception:
+            pass
+
+        # 降级：返回坐标
+        return f"{self.vehicle_state.latitude:.4f}, {self.vehicle_state.longitude:.4f}"
 
     @property
     def is_connected(self) -> bool:

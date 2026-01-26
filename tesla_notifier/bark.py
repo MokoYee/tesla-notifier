@@ -160,13 +160,26 @@ async def send_trip_end(
     if speed_avg is not None and speed_max is not None:
         lines.append(f"🚀 均速 {speed_avg:.1f} km/h · 最高 {speed_max:.1f} km/h")
 
+    # 能耗信息（只有在有效时才显示）
+    if energy_used and energy_used > 0:
+        lines.extend([
+            f"⚡ 净能耗: {energy_used:.1f} kWh",
+            f"📊 效率: {efficiency:.0f} Wh/km",
+            "",
+        ])
+    else:
+        lines.append("")
+
     lines.extend([
-        f"⚡ 净能耗: {energy_used:.1f} kWh",
-        f"📊 效率: {efficiency:.0f} Wh/km",
-        "",
         f"🔋 SoC: {start_soc}% → {end_soc}% ({soc_sign}{soc_diff}%)",
         f"📟 表显: {start_range:.0f} → {end_range:.0f} km",
     ])
+
+    # 计算续航达成率
+    range_consumed = float(start_range) - float(end_range)  # 表显消耗的续航
+    if range_consumed > 0 and distance > 0:
+        range_achievement_rate = (float(distance) / range_consumed) * 100
+        lines.append(f"🎯 续航达成率: {range_achievement_rate:.1f}%")
 
     # 总里程
     if odometer is not None:
@@ -181,7 +194,13 @@ async def send_trip_end(
     lines.append("━━━━━━━━━━━━━━━━")
 
     return await send_notification(
-        BarkOptions(title="🚗 行程结束", body="\n".join(lines), group="tesla-trip")
+        BarkOptions(
+            title="🚗 行程结束",
+            body="\n".join(lines),
+            group="tesla-trip",
+            icon=config.bark_icon,
+            badge=1,
+        )
     )
 
 
@@ -233,7 +252,13 @@ async def send_charging_complete(
     lines.append("━━━━━━━━━━━━━━━━")
 
     return await send_notification(
-        BarkOptions(title="🔌 充电完成", body="\n".join(lines), group="tesla-charging")
+        BarkOptions(
+            title="🔌 充电完成",
+            body="\n".join(lines),
+            group="tesla-charging",
+            icon=config.bark_icon,
+            badge=1,
+        )
     )
 
 
@@ -241,17 +266,88 @@ async def send_weekly_report(
     total_trips: int,
     total_distance: float,
     avg_efficiency: float,
+    longest_trip: float = 0.0,
+    total_duration_min: float = 0.0,
+    total_charging_count: int = 0,
+    total_energy_added: float = 0.0,
+    avg_speed: float = 0.0,
+    max_speed: float = 0.0,
+    hard_accel_count: int | None = None,
+    hard_brake_count: int | None = None,
+    driving_grade: str | None = None,
 ) -> bool:
     """发送周报"""
+
+    def format_duration(minutes: float) -> str:
+        """格式化时长"""
+        hours = int(minutes // 60)
+        mins = int(minutes % 60)
+        if hours > 0:
+            return f"{hours}h {mins}min"
+        return f"{mins}min"
+
     lines = [
-        "📊 本周驾驶报告",
+        "━━━━━━━━━━━━━━━━",
+        "📊 本周驾驶报告（最近7天）",
         "",
-        f"🚗 行程次数: {total_trips} 次",
-        f"📍 行驶里程: {total_distance:.1f} km",
-        f"⚡ 平均能耗: {avg_efficiency:.2f}",
+        "🚗 行程统计",
+        f"  · 行程次数: {total_trips} 次",
+        f"  · 行驶里程: {total_distance:.1f} km",
     ]
+
+    # 最长行程
+    if longest_trip > 0:
+        lines.append(f"  · 最长行程: {longest_trip:.1f} km")
+
+    # 驾驶时长
+    if total_duration_min > 0:
+        lines.append(f"  · 驾驶时长: {format_duration(total_duration_min)}")
+
+    # 速度统计
+    if avg_speed > 0 or max_speed > 0:
+        lines.append("")
+        lines.append("🚀 速度统计")
+        if avg_speed > 0:
+            lines.append(f"  · 平均速度: {avg_speed:.1f} km/h")
+        if max_speed > 0:
+            lines.append(f"  · 最高速度: {max_speed:.1f} km/h")
+
+    # 能耗统计
+    lines.extend([
+        "",
+        "⚡ 能耗统计",
+        f"  · 平均能耗: {avg_efficiency:.0f} Wh/km",
+    ])
+
+    # 充电统计
+    if total_charging_count > 0:
+        lines.extend([
+            "",
+            "🔌 充电统计",
+            f"  · 充电次数: {total_charging_count} 次",
+            f"  · 充电总量: {total_energy_added:.1f} kWh",
+        ])
+
+    # 驾驶评分
+    if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
+        lines.extend([
+            "",
+            "🏁 驾驶评分",
+            f"  · 急加速: {hard_accel_count} 次",
+            f"  · 急减速: {hard_brake_count} 次",
+            f"  · 评级: {driving_grade}",
+        ])
+
+    lines.append("━━━━━━━━━━━━━━━━")
+
     return await send_notification(
-        BarkOptions(title="🚗 Tesla 周报", body="\n".join(lines), group="tesla-weekly")
+        BarkOptions(
+            title="🚗 Tesla 周报",
+            body="\n".join(lines),
+            group="tesla-weekly",
+            icon=config.bark_icon,
+            badge=1,
+        )
     )
 
 
@@ -278,7 +374,13 @@ async def send_monthly_report(
         lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
 
     return await send_notification(
-        BarkOptions(title="🚗 Tesla 月报", body="\n".join(lines), group="tesla-monthly")
+        BarkOptions(
+            title="🚗 Tesla 月报",
+            body="\n".join(lines),
+            group="tesla-monthly",
+            icon=config.bark_icon,
+            badge=1,
+        )
     )
 
 
@@ -298,12 +400,16 @@ async def send_daily_briefing(
     suggestion: str | None = None,
 ) -> bool:
     """发送每日简报"""
+    from tesla_notifier.weather import get_weather_icon
+
+    # 根据天气状况获取动态图标
+    weather_icon = get_weather_icon(weather_condition)
+
     lines = [
         "━━━━━━━━━━━━━━━━",
         f"📍 {location}",
         "",
-        "🌤️ 今日天气",
-        weather_condition,
+        f"{weather_icon} 今日天气: {weather_condition}",
         f"🌡️ {temp:.1f}°C ({temp_min:.0f}°C ~ {temp_max:.0f}°C)",
         f"💧 湿度 {humidity}%",
     ]
@@ -324,7 +430,13 @@ async def send_daily_briefing(
     lines.append("━━━━━━━━━━━━━━━━")
 
     return await send_notification(
-        BarkOptions(title="☀️ 每日简报", body="\n".join(lines), group="tesla-daily")
+        BarkOptions(
+            title="☀️ 每日简报",
+            body="\n".join(lines),
+            group="tesla-daily",
+            icon=config.bark_icon,
+            badge=1,
+        )
     )
 
 
@@ -364,6 +476,8 @@ async def send_sentry_activated(
             body="\n".join(lines),
             group="tesla-sentry",
             level="timeSensitive",
+            icon=config.bark_icon,
+            badge=1,
         )
     )
 

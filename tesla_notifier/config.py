@@ -30,6 +30,12 @@ class Config:
     # Bark 推送
     bark_url: str = field(default_factory=lambda: os.getenv("BARK_URL", "https://api.day.app"))
     bark_key: str = field(default_factory=lambda: os.getenv("BARK_KEY", ""))
+    bark_icon: str = field(
+        default_factory=lambda: os.getenv(
+            "BARK_ICON",
+            "https://static.vecteezy.com/system/resources/previews/020/975/563/non_2x/tesla-logo-tesla-icon-transparent-free-png.png"
+        )
+    )
 
     # 天气服务
     caiyun_token: str = field(default_factory=lambda: os.getenv("CAIYUN_TOKEN", ""))
