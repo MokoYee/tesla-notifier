@@ -24,7 +24,7 @@ class Config:
     # 定时任务
     cron_enabled: bool = field(default_factory=lambda: os.getenv("ENABLE_CRON", "").lower() == "true")
     daily_cron: str = field(default_factory=lambda: os.getenv("DAILY_CRON", "0 8 * * *"))
-    weekly_cron: str = field(default_factory=lambda: os.getenv("WEEKLY_CRON", "0 9 * * 1"))
+    weekly_cron: str = field(default_factory=lambda: os.getenv("WEEKLY_CRON", "0 9 * * mon"))
     monthly_cron: str = field(default_factory=lambda: os.getenv("MONTHLY_CRON", "0 9 1 * *"))
 
     # Bark 推送
@@ -51,6 +51,25 @@ class Config:
 
     # 时区
     timezone: str = field(default_factory=lambda: os.getenv("TZ", "Asia/Shanghai"))
+
+    # 哨兵录制检测
+    sentry_notify_enabled: bool = field(
+        default_factory=lambda: os.getenv("SENTRY_NOTIFY_ENABLED", "").upper() == "ON"
+    )
+    sentry_battery_drop_threshold: float = field(
+        default_factory=lambda: float(os.getenv("SENTRY_BATTERY_DROP_THRESHOLD", "0.15"))
+    )
+    sentry_recording_cooldown: int = field(
+        default_factory=lambda: int(os.getenv("SENTRY_RECORDING_COOLDOWN", "300"))
+    )
+    sentry_power_threshold: float = field(
+        default_factory=lambda: float(os.getenv("SENTRY_POWER_THRESHOLD", "50"))
+    )
+
+    # 日志级别（DEBUG/INFO/WARNING/ERROR）
+    log_level: str = field(
+        default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").upper()
+    )
 
     @property
     def db_dsn(self) -> str:

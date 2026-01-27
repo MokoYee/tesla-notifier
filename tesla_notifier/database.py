@@ -362,7 +362,6 @@ async def get_latest_charging(car_id: str) -> ChargingData | None:
                         c.start_battery_level,
                         c.end_battery_level,
                         c.charge_energy_added,
-                        c.charger_power_max,
                         c.start_rated_range_km,
                         c.end_rated_range_km,
                         c.outside_temp_avg,
@@ -382,13 +381,28 @@ async def get_latest_charging(car_id: str) -> ChargingData | None:
                 if not row:
                     return None
 
+                charging_id = row[0]
+
+                # 从 charges 表查询该充电过程的最大功率
+                await cur.execute(
+                    """
+                    SELECT MAX(charger_power) as max_power
+                    FROM charges
+                    WHERE charging_process_id = %s
+                    AND charger_power IS NOT NULL
+                    """,
+                    (charging_id,),
+                )
+                power_row = await cur.fetchone()
+                charger_power_max = float(power_row[0]) if power_row and power_row[0] else 0.0
+
                 # 解析充电位置名称
                 location = await resolve_location_name(
-                    conn, row[12], row[13], row[14]
+                    conn, row[11], row[12], row[13]
                 )
 
                 return ChargingData(
-                    id=row[0],
+                    id=charging_id,
                     car_id=row[1],
                     start_date=_format_utc_time(row[2]),
                     end_date=_format_utc_time(row[3]),
@@ -397,10 +411,10 @@ async def get_latest_charging(car_id: str) -> ChargingData | None:
                     start_battery_level=int(row[5] or 0),
                     end_battery_level=int(row[6] or 0),
                     charge_energy_added=float(row[7] or 0),
-                    charger_power_max=float(row[8] or 0),
-                    start_rated_range_km=float(row[9] or 0),
-                    end_rated_range_km=float(row[10] or 0),
-                    outside_temp_avg=float(row[11]) if row[11] else None,
+                    charger_power_max=charger_power_max,
+                    start_rated_range_km=float(row[8] or 0),
+                    end_rated_range_km=float(row[9] or 0),
+                    outside_temp_avg=float(row[10]) if row[10] else None,
                 )
     except Exception as e:
         logger.exception(f"查询最新充电记录失败: {e}")
@@ -697,33 +711,200 @@ def _calculate_grade(hard_accel_count: int, hard_brake_count: int) -> str:
         return "D"
 
 
+# ========== 急加速/急减速检测算法 ==========
+# 急加速检测参数
+ACCEL_SURGE_THRESHOLD = 50  # 功率突增阈值 (kW)，窗口内功率变化超过此值
+ACCEL_PEAK_THRESHOLD = 40   # 峰值功率阈值 (kW)，当前功率需达到此值
+ACCEL_WINDOW_SIZE = 5       # 检测窗口大小（数据点数）
+ACCEL_COOLDOWN_SEC = 3      # 冷却时间（秒），避免同一次加速重复计数
+
+# 急减速检测参数
+#   1. 冬季电池温度低，动能回收受限，功率数据不准确
+#   2. 机械制动时功率可能为正值或接近 0
+#   3. 速度变化是减速的直接体现，更可靠
+BRAKE_SPEED_DROP_MIN = 6      # 最小速度下降量 (km/h)，避免微小减速被误判
+BRAKE_WINDOW_SIZE = 5         # 检测窗口大小（数据点数，约 3-4 秒）
+BRAKE_COOLDOWN_SEC = 2.5      # 冷却时间（秒），避免同一次减速重复计数
+BRAKE_MIN_SPEED = 10          # 最低速度限制 (km/h)，低于此速度不算急刹（停车抖动）
+
+
+def _get_brake_threshold(speed_kmh: float) -> float:
+    """根据速度获取减速率阈值
+
+    高速时稍宽松（高速刹车本身就更剧烈），低速时更严格。
+    这更符合人类对"急刹"的感知。
+
+    Args:
+        speed_kmh: 减速前的速度 (km/h)
+
+    Returns:
+        减速率阈值 (km/h/s)
+    """
+    if speed_kmh > 80:
+        return 6.5  # 高速稍宽松
+    elif speed_kmh > 50:
+        return 7.0  # 中速标准
+    else:
+        return 7.5  # 低速更严格
+
+
+def _count_hard_accel_events(power_data: list[tuple[float, datetime]]) -> int:
+    """计算急加速事件数量
+
+    算法：检测功率突增事件
+    - 在 ACCEL_WINDOW_SIZE 个数据点的窗口内，如果功率从窗口最小值突增超过 ACCEL_SURGE_THRESHOLD
+    - 且当前功率达到 ACCEL_PEAK_THRESHOLD
+    - 则计为 1 次急加速事件
+    - 事件之间需要间隔 ACCEL_COOLDOWN_SEC 秒才算新事件
+
+    Args:
+        power_data: [(power, timestamp), ...] 按时间排序的功率数据
+
+    Returns:
+        急加速事件数量
+    """
+    if len(power_data) < ACCEL_WINDOW_SIZE + 1:
+        return 0
+
+    events = 0
+    last_event_time: datetime | None = None
+
+    for i in range(ACCEL_WINDOW_SIZE, len(power_data)):
+        power, timestamp = power_data[i]
+
+        # 检查冷却期
+        if last_event_time and (timestamp - last_event_time).total_seconds() < ACCEL_COOLDOWN_SEC:
+            continue
+
+        # 计算窗口内的最小功率
+        window_min = min(d[0] for d in power_data[i - ACCEL_WINDOW_SIZE : i])
+
+        # 计算功率突增量
+        power_surge = power - window_min
+
+        # 判断是否为急加速事件
+        if power_surge >= ACCEL_SURGE_THRESHOLD and power >= ACCEL_PEAK_THRESHOLD:
+            events += 1
+            last_event_time = timestamp
+
+    return events
+
+
+def _count_hard_brake_events(speed_data: list[tuple[float, datetime]]) -> int:
+    """计算急减速事件数量
+
+    算法：检测速度骤降事件（基于速度变化率）
+    - 在 BRAKE_WINDOW_SIZE 个数据点的窗口内，找到最高速度点
+    - 计算从最高速度点到当前点的减速率 (km/h/s)
+    - 根据速度动态获取阈值（高速稍宽松，低速更严格）
+    - 如果减速率 >= 阈值 且速度下降 >= BRAKE_SPEED_DROP_MIN
+    - 且当前速度 >= BRAKE_MIN_SPEED（排除停车抖动）
+    - 则计为 1 次急减速事件
+    - 事件之间需要间隔 BRAKE_COOLDOWN_SEC 秒才算新事件
+
+    Args:
+        speed_data: [(speed, timestamp), ...] 按时间排序的速度数据
+
+    Returns:
+        急减速事件数量
+    """
+    if len(speed_data) < BRAKE_WINDOW_SIZE + 1:
+        return 0
+
+    events = 0
+    last_event_time: datetime | None = None
+
+    for i in range(BRAKE_WINDOW_SIZE, len(speed_data)):
+        current_speed, current_time = speed_data[i]
+
+        # 跳过无效数据
+        if current_speed is None:
+            continue
+
+        # 低于最低速度限制不算急刹（停车前抖动）
+        if current_speed < BRAKE_MIN_SPEED:
+            continue
+
+        # 检查冷却期
+        if last_event_time and (current_time - last_event_time).total_seconds() < BRAKE_COOLDOWN_SEC:
+            continue
+
+        # 获取窗口内的数据，找到最高速度点
+        window_data = speed_data[i - BRAKE_WINDOW_SIZE : i]
+        max_speed = 0.0
+        max_speed_time: datetime | None = None
+
+        for speed, timestamp in window_data:
+            if speed is not None and speed > max_speed:
+                max_speed = speed
+                max_speed_time = timestamp
+
+        if max_speed_time is None:
+            continue
+
+        # 计算速度下降量和时间间隔
+        speed_drop = max_speed - current_speed
+        time_span = (current_time - max_speed_time).total_seconds()
+
+        if time_span <= 0:
+            continue
+
+        # 计算减速率 (km/h/s)
+        decel_rate = speed_drop / time_span
+
+        # 根据速度获取动态阈值
+        threshold = _get_brake_threshold(max_speed)
+
+        # 判断是否为急减速事件
+        if decel_rate >= threshold and speed_drop >= BRAKE_SPEED_DROP_MIN:
+            events += 1
+            last_event_time = current_time
+
+    return events
+
+
 async def get_trip_driving_score(drive_id: int) -> DrivingScore | None:
     """获取单次行程的驾驶评分
 
-    阈值定义:
-        急加速: power >= 100kW
-        急减速: power <= -55kW
+    急加速检测：功率突增算法
+        - 窗口内功率突增 >= 50kW 且峰值 >= 40kW
+        - 冷却时间 3 秒
+
+    急减速检测：速度变化率算法
+        - 减速率 >= 7 km/h/s 且速度下降 >= 8 km/h
+        - 冷却时间 3 秒
     """
     try:
         async with get_connection() as conn:
             async with conn.cursor() as cur:
+                # 获取该行程的所有位置数据（按时间排序）
                 await cur.execute(
                     """
-                    SELECT
-                        COUNT(*) FILTER (WHERE power >= 100) as hard_accel_count,
-                        COUNT(*) FILTER (WHERE power <= -55) as hard_brake_count
+                    SELECT power, speed, date
                     FROM positions
-                    WHERE drive_id = %s AND power IS NOT NULL
+                    WHERE drive_id = %s
+                    ORDER BY date ASC
                     """,
                     (drive_id,),
                 )
-                row = await cur.fetchone()
+                rows = await cur.fetchall()
 
-                if not row:
+                if not rows:
                     return None
 
-                hard_accel_count = int(row[0] or 0)
-                hard_brake_count = int(row[1] or 0)
+                # 转换为功率数据列表（用于急加速检测）
+                power_data: list[tuple[float, datetime]] = [
+                    (float(row[0]), row[2]) for row in rows if row[0] is not None
+                ]
+
+                # 转换为速度数据列表（用于急减速检测）
+                speed_data: list[tuple[float, datetime]] = [
+                    (float(row[1]), row[2]) for row in rows if row[1] is not None
+                ]
+
+                # 计算急加速和急减速事件数
+                hard_accel_count = _count_hard_accel_events(power_data)
+                hard_brake_count = _count_hard_brake_events(speed_data)
                 grade = _calculate_grade(hard_accel_count, hard_brake_count)
 
                 return DrivingScore(
@@ -735,105 +916,3 @@ async def get_trip_driving_score(drive_id: int) -> DrivingScore | None:
         logger.exception(f"查询行程驾驶评分失败: {e}")
         return None
 
-
-async def get_daily_driving_score(car_id: str, date_str: str) -> DrivingScore | None:
-    """获取某天的驾驶评分
-
-    阈值定义:
-        急加速: power >= 100kW
-        急减速: power <= -55kW
-
-    Args:
-        car_id: 车辆 ID
-        date_str: 本地日期字符串，格式 "YYYY-MM-DD"
-    """
-    try:
-        async with get_connection() as conn:
-            async with conn.cursor() as cur:
-                tz = ZoneInfo(config.timezone)
-                # 获取本地日期对应的 UTC 时间范围
-                start_utc, end_utc = _get_local_date_range(date_str, tz)
-
-                await cur.execute(
-                    """
-                    SELECT
-                        COUNT(*) FILTER (WHERE p.power >= 100) as hard_accel_count,
-                        COUNT(*) FILTER (WHERE p.power <= -55) as hard_brake_count
-                    FROM positions p
-                    JOIN drives d ON p.drive_id = d.id
-                    WHERE d.car_id = %s
-                        AND d.start_date >= %s
-                        AND d.start_date < %s
-                        AND p.power IS NOT NULL
-                    """,
-                    (car_id, start_utc, end_utc),
-                )
-                row = await cur.fetchone()
-
-                if not row:
-                    return None
-
-                hard_accel_count = int(row[0] or 0)
-                hard_brake_count = int(row[1] or 0)
-                grade = _calculate_grade(hard_accel_count, hard_brake_count)
-
-                return DrivingScore(
-                    hard_accel_count=hard_accel_count,
-                    hard_brake_count=hard_brake_count,
-                    grade=grade,
-                )
-    except Exception as e:
-        logger.exception(f"查询每日驾驶评分失败: {e}")
-        return None
-
-
-async def get_weekly_driving_score(car_id: str) -> DrivingScore | None:
-    """获取本周驾驶评分（最近7天）
-
-    阈值定义:
-        急加速: power >= 100kW
-        急减速: power <= -55kW
-    """
-    try:
-        async with get_connection() as conn:
-            async with conn.cursor() as cur:
-                tz = ZoneInfo(config.timezone)
-                # 本地时间的当前时刻和7天前
-                local_end = datetime.now(tz)
-                local_start = local_end - timedelta(days=7)
-
-                # 转换为 UTC naive datetime（用于数据库查询）
-                start_utc = _local_to_utc(local_start)
-                end_utc = _local_to_utc(local_end)
-
-                await cur.execute(
-                    """
-                    SELECT
-                        COUNT(*) FILTER (WHERE p.power >= 100) as hard_accel_count,
-                        COUNT(*) FILTER (WHERE p.power <= -55) as hard_brake_count
-                    FROM positions p
-                    JOIN drives d ON p.drive_id = d.id
-                    WHERE d.car_id = %s
-                        AND d.start_date >= %s
-                        AND d.start_date < %s
-                        AND p.power IS NOT NULL
-                    """,
-                    (car_id, start_utc, end_utc),
-                )
-                row = await cur.fetchone()
-
-                if not row:
-                    return None
-
-                hard_accel_count = int(row[0] or 0)
-                hard_brake_count = int(row[1] or 0)
-                grade = _calculate_grade(hard_accel_count, hard_brake_count)
-
-                return DrivingScore(
-                    hard_accel_count=hard_accel_count,
-                    hard_brake_count=hard_brake_count,
-                    grade=grade,
-                )
-    except Exception as e:
-        logger.exception(f"查询周驾驶评分失败: {e}")
-        return None

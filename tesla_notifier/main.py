@@ -220,16 +220,6 @@ async def send_daily_briefing_task() -> None:
         yesterday = await database.get_yesterday_summary(config.car_id)
         suggestion = generate_weather_suggestion(weather)
 
-        # 获取昨日驾驶评分
-        from datetime import timedelta
-        from zoneinfo import ZoneInfo
-
-        tz = ZoneInfo(config.timezone)
-        from datetime import datetime
-
-        yesterday_date = (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
-        score = await database.get_daily_driving_score(config.car_id, yesterday_date)
-
         success = await bark.send_daily_briefing(
             location=location,
             weather_condition=weather.condition,
@@ -240,9 +230,6 @@ async def send_daily_briefing_task() -> None:
             yesterday_trips=yesterday.total_trips if yesterday else None,
             yesterday_distance=yesterday.total_distance if yesterday else None,
             yesterday_efficiency=yesterday.avg_efficiency if yesterday else None,
-            hard_accel_count=score.hard_accel_count if score else None,
-            hard_brake_count=score.hard_brake_count if score else None,
-            driving_grade=score.grade if score else None,
             suggestion=suggestion,
         )
 
@@ -270,20 +257,6 @@ async def send_weekly_report_task() -> None:
 
         logger.info(f"周报数据汇总: {summary}")
 
-        # 获取本周驾驶评分（最近7天）
-        from datetime import timedelta
-        from zoneinfo import ZoneInfo
-
-        tz = ZoneInfo(config.timezone)
-        from datetime import datetime
-
-        # 计算最近7天的日期范围
-        local_end = datetime.now(tz)
-        local_start = local_end - timedelta(days=7)
-
-        # 查询这7天的驾驶评分（需要新增函数）
-        score = await database.get_weekly_driving_score(config.car_id)
-
         success = await bark.send_weekly_report(
             total_trips=summary.total_trips,
             total_distance=summary.total_distance,
@@ -294,9 +267,6 @@ async def send_weekly_report_task() -> None:
             total_energy_added=summary.total_energy_added,
             avg_speed=summary.avg_speed,
             max_speed=summary.max_speed,
-            hard_accel_count=score.hard_accel_count if score else None,
-            hard_brake_count=score.hard_brake_count if score else None,
-            driving_grade=score.grade if score else None,
         )
 
         if success:
@@ -380,6 +350,36 @@ async def handle_sentry_deactivated(duration_min: float | None = None) -> None:
         logger.exception(f"处理哨兵关闭异常: {e}")
 
 
+async def handle_sentry_recording(power_w: float) -> None:
+    """处理哨兵录制事件
+
+    当哨兵模式下检测到功率跳变时触发，表示可能有人经过触发了录制。
+
+    Args:
+        power_w: 触发时的功率（W）
+    """
+    logger.info(f"========== 检测到哨兵录制事件: {power_w:.0f}W ==========")
+
+    try:
+        # 获取位置和电量信息
+        location = await mqtt_handler.get_location_str() if mqtt_handler else None
+        battery_level = mqtt_handler.vehicle_state.battery_level if mqtt_handler else None
+
+        success = await bark.send_sentry_recording(
+            power_w=power_w,
+            location=location,
+            battery_level=battery_level,
+        )
+
+        if success:
+            logger.info("哨兵录制推送成功")
+        else:
+            logger.error("哨兵录制推送失败")
+
+    except Exception as e:
+        logger.exception(f"处理哨兵录制异常: {e}")
+
+
 async def run() -> None:
     """运行服务"""
     global mqtt_handler, scheduler
@@ -407,6 +407,10 @@ async def run() -> None:
     logger.info(f"  CAIYUN_TOKEN: {'(已配置)' if config.caiyun_token else '(未配置)'}")
     logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
+    logger.debug(f"  SENTRY_NOTIFY_ENABLED: 哨兵录制{'(已开启)' if config.sentry_notify_enabled else '(已关闭)'}")
+    if config.sentry_notify_enabled:
+        logger.debug(f"  SENTRY_POWER_THRESHOLD: 功率阈值{config.sentry_power_threshold}W")
+        logger.debug(f"  SENTRY_RECORDING_COOLDOWN: 防抖间隔{config.sentry_recording_cooldown}s")
 
     # 初始化数据库连接池
     await database.init_pool()
@@ -422,6 +426,7 @@ async def run() -> None:
             on_charging_complete=handle_charging_complete,
             on_sentry_activated=handle_sentry_activated,
             on_sentry_deactivated=handle_sentry_deactivated,
+            on_sentry_recording=handle_sentry_recording,
         )
         mqtt_handler.set_event_loop(loop)
         mqtt_handler.connect()

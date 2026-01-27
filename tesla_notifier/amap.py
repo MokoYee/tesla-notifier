@@ -1,7 +1,11 @@
 """高德地图 API 模块
 
 用于逆地理编码（坐标转地址），提供更友好的中文地址显示。
-优先返回 100米内的广场、商场、小区，其次返回街道门牌号。
+
+地址解析优先级：
+1. AOI（兴趣面）：当前所在的区域（如物流园、商场、小区等）
+2. 最近的 POI（兴趣点）：优先使用 POI 的 address 字段（更精确）
+3. formatted_address：高德返回的格式化地址（兜底）
 """
 
 import math
@@ -18,12 +22,6 @@ AMAP_REGEO_URL = "https://restapi.amap.com/v3/geocode/regeo"
 
 # 请求超时（秒）
 REQUEST_TIMEOUT = 10.0
-
-# 广场、商场关键词
-PLAZA_KEYWORDS = ["广场", "商场", "购物中心", "购物", "商业街", "商业广场", "商业中心"]
-
-# 小区关键词（通过 POI 类型判断）
-COMMUNITY_KEYWORDS = ["住宅小区", "住宅区", "小区", "公寓", "花园"]
 
 # WGS-84 转 GCJ-02 坐标转换常量
 _A = 6378245.0  # 长半轴
@@ -88,12 +86,12 @@ def _transform_lon(x: float, y: float) -> float:
 
 
 async def reverse_geocode(latitude: float, longitude: float) -> str | None:
-    """逆地理编码：返回精确地址
+    """逆地理编码：坐标转地址
 
     优先级：
-    1. 100米内的广场、商场（距离最近的）
-    2. 100米内的小区（距离最近的）
-    3. 区 + 乡镇 + 街道 + 门牌号
+    1. 最近的 POI（兴趣点）：优先使用 address 字段（最精确，如"环通物流园7-A07"）
+    2. AOI（兴趣面）：当前所在的区域（如"环通物流园"）
+    3. formatted_address：高德返回的格式化地址（兜底）
 
     Args:
         latitude: WGS-84 纬度
@@ -114,7 +112,7 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
             "location": f"{gcj_lon},{gcj_lat}",  # 高德格式：经度,纬度
             "extensions": "all",
             "output": "json",
-            "radius": "100",  # 搜索半径 100 米
+            "radius": "200",  # 搜索半径 200 米
         }
 
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -132,92 +130,75 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
 
             regeocode = data.get("regeocode", {})
             addr = regeocode.get("addressComponent", {})
+            aois = regeocode.get("aois", [])
             pois = regeocode.get("pois", [])
+            formatted_address = regeocode.get("formatted_address", "")
 
+            # 获取区县名称（用于组合地址）
             district = addr.get("district", "")
-            township = addr.get("township", "")
 
-            plazas_100m = []  # 100米内的广场、商场
-            communities_100m = []  # 100米内的小区
-
-            # 分析 POI
+            # 优先级1: 最近的 POI（兴趣点）- 最精确
+            # POI 列表已按距离排序，取第一个有效的
             for poi in pois:
-                name = poi.get("name", "")
-                poi_type = poi.get("type", "")
-                distance = poi.get("distance", "")
+                poi_name = poi.get("name", "")
+                poi_address = poi.get("address", "")
+                poi_distance = poi.get("distance", "")
 
-                if not name or name in ["[]", "无", ""]:
+                if not poi_name or poi_name in ["[]", "无", ""]:
                     continue
 
                 try:
-                    dist_value = float(distance)
+                    dist_value = float(poi_distance)
                 except (ValueError, TypeError):
                     continue
 
-                # 只处理 100米内的 POI
+                # 只使用 100 米内的 POI
                 if dist_value > 100:
                     continue
 
-                # 判断是否是广场、商场
-                is_plaza = any(kw in name or kw in poi_type for kw in PLAZA_KEYWORDS)
-                if is_plaza:
-                    plazas_100m.append((name, dist_value))
+                # 优先使用 POI 的 address 字段
+                if poi_address and poi_address not in ["[]", "无", ""]:
+                    return f"{district}{poi_address}"
 
-                # 判断是否是小区
-                is_community = any(kw in poi_type for kw in COMMUNITY_KEYWORDS)
-                if is_community:
-                    communities_100m.append((name, dist_value))
+                # 没有 address 则使用 name
+                return f"{district}{poi_name}"
 
-            # 优先级1: 100米内的广场、商场
-            if plazas_100m:
-                # 选择距离最近的
-                plazas_100m.sort(key=lambda x: x[1])
-                name, _ = plazas_100m[0]
-                return f"{district}{name}"
+            # 优先级2: AOI（兴趣面）- 当前所在的区域
+            # distance=0 表示坐标点在该区域内部
+            for aoi in aois:
+                aoi_name = aoi.get("name", "")
+                aoi_distance = aoi.get("distance", "")
 
-            # 优先级2: 100米内的小区
-            if communities_100m:
-                # 选择距离最近的
-                communities_100m.sort(key=lambda x: x[1])
-                name, _ = communities_100m[0]
-                return f"{district}{name}"
+                if not aoi_name or aoi_name in ["[]", "无", ""]:
+                    continue
 
-            # 优先级3: 区 + 乡镇 + 街道 + 门牌号
-            street_info = addr.get("streetNumber", {})
+                try:
+                    dist_value = float(aoi_distance)
+                except (ValueError, TypeError):
+                    continue
 
-            # 处理 streetNumber 可能是 dict 或 list
-            if isinstance(street_info, dict):
-                street = street_info.get("street", "")
-                number = street_info.get("number", "")
-            else:
-                street = ""
-                number = ""
+                # 在区域内部（distance=0）或非常近（<50米）
+                if dist_value <= 50:
+                    return f"{district}{aoi_name}"
 
-            # 确保是字符串
-            if isinstance(street, list):
-                street = ""
-            if isinstance(number, list):
-                number = ""
+            # 优先级3: formatted_address（兜底）
+            # 去掉省市前缀，保留区县及以下
+            if formatted_address:
+                province = addr.get("province", "")
+                city = addr.get("city", "")
 
-            # 如果没有街道信息，尝试从 roads 字段提取
-            if not street:
-                roads = regeocode.get("roads", [])
-                if roads:
-                    street = roads[0].get("name", "")
+                result = formatted_address
+                # 去掉省份前缀
+                if province and result.startswith(province):
+                    result = result[len(province):]
+                # 去掉城市前缀
+                if city and result.startswith(city):
+                    result = result[len(city):]
 
-            # 组合地址
-            parts = []
-            if district:
-                parts.append(district)
-            if township and township != district:
-                parts.append(township)
-            if street and street not in ["[]", "无", ""]:
-                parts.append(street)
-            if number and number not in ["[]", "无", ""]:
-                parts.append(number)
+                if result:
+                    return result
 
-            result = "".join(parts) if parts else None
-            return result
+            return None
 
     except httpx.TimeoutException:
         logger.warning("高德 API 请求超时")

@@ -170,9 +170,14 @@ async def send_trip_end(
     else:
         lines.append("")
 
+    if outside_temp is not None:
+        lines.append(f"🌡️ 室外: {outside_temp:.1f}°C")
+
+    range_diff = start_range - end_range
+    range_sign = "-" if range_diff > 0 else "+"
     lines.extend([
         f"🔋 SoC: {start_soc}% → {end_soc}% ({soc_sign}{soc_diff}%)",
-        f"📟 表显: {start_range:.0f} → {end_range:.0f} km",
+        f"📟 表显: {start_range:.0f} → {end_range:.0f} km ({range_sign}{abs(range_diff):.0f} km)",
     ])
 
     # 计算续航达成率
@@ -184,9 +189,6 @@ async def send_trip_end(
     # 总里程
     if odometer is not None:
         lines.append(f"🛣️ 总里程: {odometer:.1f} km")
-
-    if outside_temp is not None:
-        lines.append(f"🌡️ 室外: {outside_temp:.1f}°C")
 
     if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
         lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
@@ -253,7 +255,7 @@ async def send_charging_complete(
 
     return await send_notification(
         BarkOptions(
-            title="🔌 充电完成",
+            title="🔋 充电完成",
             body="\n".join(lines),
             group="tesla-charging",
             icon=config.bark_icon,
@@ -272,9 +274,6 @@ async def send_weekly_report(
     total_energy_added: float = 0.0,
     avg_speed: float = 0.0,
     max_speed: float = 0.0,
-    hard_accel_count: int | None = None,
-    hard_brake_count: int | None = None,
-    driving_grade: str | None = None,
 ) -> bool:
     """发送周报"""
 
@@ -319,23 +318,12 @@ async def send_weekly_report(
         f"  · 平均能耗: {avg_efficiency:.0f} Wh/km",
     ])
 
-    # 充电统计
     if total_charging_count > 0:
         lines.extend([
             "",
             "🔌 充电统计",
             f"  · 充电次数: {total_charging_count} 次",
             f"  · 充电总量: {total_energy_added:.1f} kWh",
-        ])
-
-    # 驾驶评分
-    if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
-        lines.extend([
-            "",
-            "🏁 驾驶评分",
-            f"  · 急加速: {hard_accel_count} 次",
-            f"  · 急减速: {hard_brake_count} 次",
-            f"  · 评级: {driving_grade}",
         ])
 
     lines.append("━━━━━━━━━━━━━━━━")
@@ -394,9 +382,6 @@ async def send_daily_briefing(
     yesterday_trips: int | None = None,
     yesterday_distance: float | None = None,
     yesterday_efficiency: float | None = None,
-    hard_accel_count: int | None = None,
-    hard_brake_count: int | None = None,
-    driving_grade: str | None = None,
     suggestion: str | None = None,
 ) -> bool:
     """发送每日简报"""
@@ -421,8 +406,6 @@ async def send_daily_briefing(
             f"🚗 {yesterday_trips} 次行程，{yesterday_distance:.1f} km",
             f"⚡ 平均能耗: {yesterday_efficiency:.0f} Wh/km",
         ])
-        if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
-            lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
 
     if suggestion:
         lines.extend(["", "💡 今日建议", suggestion])
@@ -482,55 +465,6 @@ async def send_sentry_activated(
     )
 
 
-async def send_sentry_event(
-    event_type: str,
-    location: str | None = None,
-    battery_level: int | None = None,
-) -> bool:
-    """发送哨兵事件推送"""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    from tesla_notifier.config import config
-
-    tz = ZoneInfo(config.timezone)
-    now = datetime.now(tz).strftime("%H:%M")
-
-    # 事件类型映射
-    event_titles = {
-        "alarm": "🚨 车辆警报触发",
-        "sentry": "⚠️ 哨兵事件检测",
-        "default": "⚠️ 哨兵事件",
-    }
-    title = event_titles.get(event_type, event_titles["default"])
-
-    lines = [
-        "━━━━━━━━━━━━━━━━",
-        f"🕐 {now}",
-    ]
-
-    if location:
-        lines.append(f"📍 {location}")
-
-    if battery_level is not None:
-        lines.append(f"🔋 电量: {battery_level}%")
-
-    lines.extend([
-        "",
-        "检测到异常活动，请及时查看车辆状态",
-        "━━━━━━━━━━━━━━━━",
-    ])
-
-    return await send_notification(
-        BarkOptions(
-            title=title,
-            body="\n".join(lines),
-            group="tesla-sentry",
-            level="timeSensitive",
-            sound="alarm",
-        )
-    )
-
 
 async def send_sentry_deactivated(duration_min: float | None = None) -> bool:
     """发送哨兵模式关闭推送"""
@@ -566,5 +500,61 @@ async def send_sentry_deactivated(duration_min: float | None = None) -> bool:
             title="🛡️ 哨兵模式已关闭",
             body="\n".join(lines),
             group="tesla-sentry",
+        )
+    )
+
+
+async def send_sentry_recording(
+    power_w: float,
+    location: str | None = None,
+    battery_level: int | None = None,
+) -> bool:
+    """发送哨兵录制事件推送
+
+    当哨兵模式下检测到功率跳变（可能有人经过触发录制）时推送通知。
+
+    Args:
+        power_w: 触发时的功率（W）
+        location: 车辆位置
+        battery_level: 电池电量
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from tesla_notifier.config import config
+
+    tz = ZoneInfo(config.timezone)
+    now = datetime.now(tz).strftime("%H:%M")
+
+    lines = [
+        "━━━━━━━━━━━━━━━━",
+        f"🕐 {now}",
+    ]
+
+    if location:
+        lines.append(f"📍 {location}")
+
+    if battery_level is not None:
+        lines.append(f"🔋 电量: {battery_level}%")
+
+    lines.extend([
+        "",
+        "检测到异常活动，请及时查看车辆状态",
+        # f"⚡ 检测到功率跳变: {power_w:.0f}W",
+        "",
+        "可能有人经过，哨兵正在录制",
+        "请及时查看车辆状态",
+        "━━━━━━━━━━━━━━━━",
+    ])
+
+    return await send_notification(
+        BarkOptions(
+            title="🎥 哨兵录制中",
+            body="\n".join(lines),
+            group="tesla-sentry",
+            level="timeSensitive",
+            sound="minuet",  # 使用不同的提示音区分普通通知
+            icon=config.bark_icon,
+            badge=1,
         )
     )

@@ -38,12 +38,18 @@ class SimpleFormatter(logging.Formatter):
 def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """创建日志器"""
     logger = logging.getLogger(name)
-    logger.setLevel(level)
+    # 设置 logger 默认为 DEBUG 级别，让 handler 各自控制输出级别
+    logger.setLevel(logging.DEBUG)
 
     if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(SimpleFormatter())
-        logger.addHandler(handler)
+        # 从配置获取日志级别
+        log_level = getattr(logging, config.log_level, logging.INFO)
+
+        # 控制台 handler：使用配置的日志级别
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(SimpleFormatter())
+        logger.addHandler(console_handler)
 
     return logger
 
