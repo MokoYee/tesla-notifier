@@ -2,6 +2,8 @@
 
 [![Docker Image](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml)
 
+**中文** | [English](README_EN.md)
+
 TeslaMate 车辆状态推送插件 - 行程结束、充电完成、哨兵事件实时通知到 iPhone，让你随时掌握爱车动态。
 
 ## 功能
@@ -106,7 +108,7 @@ Tesla API → TeslaMate → PostgreSQL
                 ↓
             MQTT Broker
                 ↓
-          Tesla Notifier → Bark → iOS
+          Tesla Notifier → Bark → iPhone
 ```
 
 ## 许可证
