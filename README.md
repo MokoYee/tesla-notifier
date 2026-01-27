@@ -2,7 +2,7 @@
 
 [![Docker Image](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml)
 
-TeslaMate 推送通知服务 - 独立部署的轻量级推送服务，通过 [Bark](https://bark.day.app/) 将车辆状态实时推送到 iOS 设备。
+TeslaMate 推送通知服务 - 轻量级推送服务，通过 [Bark](https://bark.day.app/) 将车辆状态实时推送到 iOS 设备。
 
 ## 功能
 
@@ -23,7 +23,7 @@ TeslaMate 推送通知服务 - 独立部署的轻量级推送服务，通过 [Ba
 
 ### Docker 部署（推荐）
 
-**使用预构建镜像：**
+**使用构建镜像：**
 
 ```bash
 docker pull ghcr.io/mokoyee/tesla-notifier:latest
@@ -112,6 +112,23 @@ networks:
   - [申请 Token](https://platform.caiyunapp.com/)
   - [API 文档](https://docs.caiyunapp.com/weather-api/v2/v2.6/1-realtime.html)
 - **Open-Meteo**（备用）- 免费，无需配置，彩云失败时自动回退
+
+## 高德地图服务
+
+配置 `AMAP_KEY` 后启用逆地理编码功能，将 GPS 坐标转换为更精确的中文地址。
+**申请步骤：**
+
+1. 注册 [高德开放平台](https://lbs.amap.com/) 账号
+2. 进入控制台 → 应用管理 → 创建新应用
+3. 添加 Key，服务平台选择「Web服务」
+4. 将获取的 Key 配置到 `AMAP_KEY` 环境变量
+
+**API 配额：**
+- 个人开发者：每日 5000 次免费调用
+- 企业认证后可提升配额
+
+**参考文档：**
+- [逆地理编码 API](https://lbs.amap.com/api/webservice/guide/api/georegeo)
 
 ## 架构
 
