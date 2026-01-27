@@ -2,7 +2,7 @@
 
 [![Docker Image](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml)
 
-TeslaMate 推送通知服务 - 轻量级推送服务，通过 [Bark](https://bark.day.app/) 将车辆状态实时推送到 iOS 设备。
+TeslaMate 车辆状态推送插件 - 行程结束、充电完成、哨兵事件实时通知到 iPhone，让你随时掌握爱车动态。
 
 ## 功能
 
@@ -21,90 +21,59 @@ TeslaMate 推送通知服务 - 轻量级推送服务，通过 [Bark](https://bar
 
 ## 快速开始
 
-### Docker 部署（推荐）
+### 方式一：独立部署
 
-**使用构建镜像：**
+1. 下载 `docker-compose.yml` 到 TeslaMate 同级目录：
 
 ```bash
-docker pull ghcr.io/mokoyee/tesla-notifier:latest
+curl -O https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/docker-compose.yml
 ```
 
-**或使用 docker-compose：**
-
-1. 创建 `docker-compose.yml`：
-```yaml
-version: '3'
-services:
-  tesla-notifier:
-    image: ghcr.io/mokoyee/tesla-notifier:latest
-    container_name: tesla-notifier
-    restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - teslamate_default
-
-networks:
-  teslamate_default:
-    external: true
-```
-
-2. 复制并编辑配置文件：
-```bash
-cp .env.example .env
-# 编辑 .env 配置 Bark Key 和数据库连接
-```
+2. 编辑 `docker-compose.yml`，修改 `BARK_KEY` 等必要配置（详见文件内注释）
 
 3. 启动服务：
+
 ```bash
 docker-compose up -d
 ```
 
-### 本地运行
+### 方式二：合并到 TeslaMate
 
-1. 安装依赖：
-```bash
-pip install -e .
+在 TeslaMate 的 `docker-compose.yml` 中添加以下服务：
+
+```yaml
+services:
+  # ... 其他 TeslaMate 服务 ...
+
+  tesla-notifier:
+    image: ghcr.io/mokoyee/tesla-notifier:latest
+    container_name: tesla-notifier
+    restart: unless-stopped
+    environment:
+      - ENABLE_MQTT=true
+      - ENABLE_CRON=true
+      - BARK_KEY=your_bark_key  # 必填：替换为你的 Bark Key
+      # 更多配置项参考：https://github.com/MokoYee/tesla-notifier
 ```
 
-2. 配置环境变量（或创建 `.env` 文件）
+> 合并部署时无需配置数据库和 MQTT 地址，默认值已适配 TeslaMate 标准配置。
 
-3. 运行：
+### 更新镜像
+
 ```bash
-python -m tesla_notifier.main
+docker-compose pull && docker-compose up -d
 ```
 
 ## 配置说明
 
-| 环境变量 | 说明 | 默认值 |
-|---------|------|--------|
-| `DB_HOST` | PostgreSQL 主机 | localhost |
-| `DB_PORT` | PostgreSQL 端口 | 5432 |
-| `DB_NAME` | 数据库名 | teslamate |
-| `DB_USER` | 数据库用户 | teslamate |
-| `DB_PASSWORD` | 数据库密码 | - |
-| `ENABLE_MQTT` | 启用 MQTT 订阅 | false |
-| `MQTT_URL` | MQTT 服务器地址 | mqtt://localhost:1883 |
-| `ENABLE_CRON` | 启用定时任务 | false |
-| `DAILY_CRON` | 每日简报 cron | 0 8 * * * |
-| `WEEKLY_CRON` | 周报 cron | 0 9 * * mon |
-| `MONTHLY_CRON` | 月报 cron | 0 9 1 * * |
-| `BARK_URL` | Bark 服务地址 | https://api.day.app |
-| `BARK_KEY` | Bark 推送 Key | - |
-| `CAIYUN_TOKEN` | 彩云天气 Token（可选） | - |
-| `AMAP_KEY` | 高德地图 Key（可选） | - |
-| `CAR_ID` | 车辆 ID | 1 |
-| `MIN_TRIP_DISTANCE` | 最小行程距离(km) | 1 |
-| `TZ` | 时区 | Asia/Shanghai |
+完整配置项请参考 [docker-compose.yml](docker-compose.yml) 文件内的注释。
 
-## 与 TeslaMate 集成
-确保 `docker-compose.yml` 中的网络配置正确，使服务能够访问 TeslaMate 的数据库和 MQTT 服务。
+**必填配置：**
+- `BARK_KEY` - Bark 推送密钥
 
-```yaml
-networks:
-  teslamate_default:
-    external: true
-```
+**可选配置：**
+- `CAIYUN_TOKEN` - 彩云天气 Token，提供更详细的天气信息
+- `AMAP_KEY` - 高德地图 Key，提供更精确的中文地址
 
 ## 天气服务
 
