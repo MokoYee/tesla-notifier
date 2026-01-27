@@ -1,0 +1,73 @@
+# 自动构建并推送 Docker 镜像到 GitHub Container Registry
+# 触发条件：推送到 main 分支，或创建 tag
+
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'  # 匹配 v1.0.0, v2.1.3 等 tag
+  # 允许手动触发
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # 镜像名称：ghcr.io/<owner>/<repo>
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    # 授予 GITHUB_TOKEN 写入 packages 的权限
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 设置 Docker Buildx（支持多平台构建）
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3. 登录到 GitHub Container Registry
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. 提取镜像元数据（tag、label）
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # 对于 main 分支，打 latest 标签
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 对于 tag，使用 tag 名称（去掉 v 前缀）
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # 使用 commit SHA 作为标签
+            type=sha,prefix=
+
+      # 5. 构建并推送镜像
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 启用构建缓存，加速后续构建
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 多平台构建（可选，取消注释启用）
+          # platforms: linux/amd64,linux/arm64

@@ -1,5 +1,7 @@
 # Tesla Notifier
 
+[![Docker Image](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml)
+
 TeslaMate 推送通知服务 - 独立部署的轻量级推送服务，通过 [Bark](https://bark.day.app/) 将车辆状态实时推送到 iOS 设备。
 
 ## 功能
@@ -16,23 +18,42 @@ TeslaMate 推送通知服务 - 独立部署的轻量级推送服务，通过 [Ba
 - **周报** - 每周一推送本周驾驶统计
 - **月报** - 每月1日推送上月驾驶统计 + 驾驶评分
 
-### 驾驶评分
-
-基于功率数据分析驾驶习惯：
-- 急加速次数（power ≥ 100kW）
-- 急减速次数（power ≤ -55kW）
-- 评分等级：A/B/C/D
 
 ## 快速开始
 
 ### Docker 部署（推荐）
 
-1. 复制配置文件：
+**使用预构建镜像：**
+
 ```bash
-cp .env.example .env
+docker pull ghcr.io/mokoyee/tesla-notifier:latest
 ```
 
-2. 编辑 `.env` 配置 Bark Key 和数据库连接
+**或使用 docker-compose：**
+
+1. 创建 `docker-compose.yml`：
+```yaml
+version: '3'
+services:
+  tesla-notifier:
+    image: ghcr.io/mokoyee/tesla-notifier:latest
+    container_name: tesla-notifier
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - teslamate_default
+
+networks:
+  teslamate_default:
+    external: true
+```
+
+2. 复制并编辑配置文件：
+```bash
+cp .env.example .env
+# 编辑 .env 配置 Bark Key 和数据库连接
+```
 
 3. 启动服务：
 ```bash
@@ -66,7 +87,7 @@ python -m tesla_notifier.main
 | `MQTT_URL` | MQTT 服务器地址 | mqtt://localhost:1883 |
 | `ENABLE_CRON` | 启用定时任务 | false |
 | `DAILY_CRON` | 每日简报 cron | 0 8 * * * |
-| `WEEKLY_CRON` | 周报 cron | 0 9 * * 1 |
+| `WEEKLY_CRON` | 周报 cron | 0 9 * * mon |
 | `MONTHLY_CRON` | 月报 cron | 0 9 1 * * |
 | `BARK_URL` | Bark 服务地址 | https://api.day.app |
 | `BARK_KEY` | Bark 推送 Key | - |
@@ -77,7 +98,6 @@ python -m tesla_notifier.main
 | `TZ` | 时区 | Asia/Shanghai |
 
 ## 与 TeslaMate 集成
-
 确保 `docker-compose.yml` 中的网络配置正确，使服务能够访问 TeslaMate 的数据库和 MQTT 服务。
 
 ```yaml
