@@ -1,8 +1,12 @@
-# Tesla Notifier
+<h1 align="center">Tesla Notifier</h1>
+<p align="center">English ｜ <a href="README.md">简体中文</a></p>
 
-[![Docker Image](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml)
-
-[中文](README.md) | **English**
+<p align="center">
+  <a href="https://github.com/MokoYee/tesla-notifier/releases"><img src="https://img.shields.io/github/v/release/MokoYee/tesla-notifier?style=flat-square&color=blue" alt="Release"></a>
+  <a href="https://github.com/MokoYee/tesla-notifier/stargazers"><img src="https://img.shields.io/github/stars/MokoYee/tesla-notifier?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/MokoYee/tesla-notifier/blob/main/LICENSE"><img src="https://img.shields.io/github/license/MokoYee/tesla-notifier?style=flat-square" alt="License"></a>
+  <a href="https://github.com/MokoYee/tesla-notifier/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/MokoYee/tesla-notifier/build.yml?style=flat-square&label=CI" alt="CI"></a>
+</p>
 
 A TeslaMate push notification plugin - Get real-time notifications for trip completion, charging status, and sentry events on your iPhone.
 
@@ -113,4 +117,4 @@ Tesla API → TeslaMate → PostgreSQL
 
 ## License
 
-MIT
+GPL-3.0

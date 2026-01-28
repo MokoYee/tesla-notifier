@@ -19,7 +19,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -45,12 +45,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # 对于 main 分支，打 latest 标签
             type=raw,value=latest,enable={{is_default_branch}}
-            # 对于 tag，使用 tag 名称（去掉 v 前缀）
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # 使用 commit SHA 作为标签
             type=sha,prefix=
 
       - name: Build and push

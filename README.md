@@ -1,8 +1,12 @@
-# Tesla Notifier
+<h1 align="center">Tesla Notifier</h1>
+<p align="center">简体中文 ｜ <a href="README_EN.md">English</a></p>
 
-[![Docker Image](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/MokoYee/tesla-notifier/actions/workflows/build-and-push.yml)
-
-**中文** | [English](README_EN.md)
+<p align="center">
+  <a href="https://github.com/MokoYee/tesla-notifier/releases"><img src="https://img.shields.io/github/v/release/MokoYee/tesla-notifier?style=flat-square&color=blue" alt="Release"></a>
+  <a href="https://github.com/MokoYee/tesla-notifier/stargazers"><img src="https://img.shields.io/github/stars/MokoYee/tesla-notifier?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/MokoYee/tesla-notifier/blob/main/LICENSE"><img src="https://img.shields.io/github/license/MokoYee/tesla-notifier?style=flat-square" alt="License"></a>
+  <a href="https://github.com/MokoYee/tesla-notifier/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/MokoYee/tesla-notifier/build.yml?style=flat-square&label=CI" alt="CI"></a>
+</p>
 
 TeslaMate 车辆状态推送插件 - 行程结束、充电完成、哨兵事件实时通知到 iPhone，让你随时掌握爱车动态。
 
@@ -113,4 +117,4 @@ Tesla API → TeslaMate → PostgreSQL
 
 ## 许可证
 
-MIT
+GPL-3.0
