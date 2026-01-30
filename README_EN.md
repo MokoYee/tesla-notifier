@@ -1,5 +1,5 @@
 <h1 align="center">Tesla Notifier</h1>
-<p align="center">English ｜ <a href="README.md">简体中文</a></p>
+<p align="center"><a href="README.md">简体中文</a> | English</p>
 
 <p align="center">
   <a href="https://github.com/MokoYee/tesla-notifier/releases"><img src="https://img.shields.io/github/v/release/MokoYee/tesla-notifier?style=flat-square&color=blue" alt="Release"></a>
