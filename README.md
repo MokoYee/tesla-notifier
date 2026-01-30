@@ -10,6 +10,12 @@
 
 TeslaMate 车辆状态推送插件 - 行程结束、充电完成、哨兵事件实时通知到 iPhone，让你随时掌握爱车动态。
 
+## 📸 推送示例
+
+<p align="center">
+  <img src=".github/assets/example.jpg" width="400" alt="推送示例">
+</p>
+
 ## 功能
 
 ### 实时推送（MQTT 驱动）
