@@ -12,9 +12,7 @@ A TeslaMate push notification plugin - Get real-time notifications for trip comp
 
 ## 📸 Notification Examples
 
-<p align="center">
-  <img src=".github/assets/example.jpg" width="400" alt="Notification Examples">
-</p>
+<img src=".github/assets/example.jpg" width="400" alt="Notification Examples">
 
 ## Features
 
