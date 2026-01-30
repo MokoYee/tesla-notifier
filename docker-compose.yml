@@ -1,6 +1,6 @@
 services:
   tesla-notifier:
-    image: ghcr.io/mokoyee/tesla-notifier:latest
+    image: mokoyee/tesla-notifier:latest
     container_name: tesla-notifier
     restart: unless-stopped
     environment:
@@ -19,24 +19,15 @@ services:
 
       # 定时任务配置
       - ENABLE_CRON=true
-      - DAILY_CRON=0 8 * * *      # 每天早上8点推送日报
-      - WEEKLY_CRON=0 9 * * 1     # 每周一上午9点推送周报
-      - MONTHLY_CRON=0 9 1 * *    # 每月1号上午9点推送月报
+      - DAILY_CRON=0 8 * * *
+      - WEEKLY_CRON=0 9 * * mon     
+      - MONTHLY_CRON=0 9 1 * *
 
       # Bark 推送配置
-      - BARK_URL=https://api.day.app  # 或自建 http://bark:8080
+      - BARK_URL=https://api.day.app
       - BARK_KEY=your_bark_key
-      # - BARK_ICON=https://your-custom-icon-url.png  # 可选，默认使用 Tesla Logo
-
-      # 天气服务（可选，不配置则使用免费的 Open-Meteo）
-      # - CAIYUN_TOKEN=your_caiyun_token
-
-      # 高德地图
-      # - AMAP_KEY=your_amap_key
-
       # 车辆配置
       - CAR_ID=1
-      # 最小行程距离(km)，过滤短行程
       - MIN_TRIP_DISTANCE=1
 
       # 时区
