@@ -3,9 +3,9 @@
 用于逆地理编码（坐标转地址），提供更友好的中文地址显示。
 
 地址解析优先级：
-1. AOI（兴趣面）：当前所在的区域（如物流园、商场、小区等）
-2. 最近的 POI（兴趣点）：优先使用 POI 的 address 字段（更精确）
-3. formatted_address：高德返回的格式化地址（兜底）
+1. AOI（兴趣面）：当坐标在区域内部（distance=0）时，直接使用区域名称
+2. POI（兴趣点）：100米内的 POI，优先使用 name 字段
+3. formatted_address：高德返回的格式化地址
 """
 
 import math
@@ -89,9 +89,9 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
     """逆地理编码：坐标转地址
 
     优先级：
-    1. 最近的 POI（兴趣点）：优先使用 address 字段（最精确，如"环通物流园7-A07"）
-    2. AOI（兴趣面）：当前所在的区域（如"环通物流园"）
-    3. formatted_address：高德返回的格式化地址（兜底）
+    1. AOI（兴趣面）：当 distance=0 时，表示坐标在区域内部，直接使用区域名称
+    2. POI（兴趣点）：100米内的 POI，优先使用 name 字段
+    3. formatted_address：高德返回的格式化地址
 
     Args:
         latitude: WGS-84 纬度
@@ -137,11 +137,29 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
             # 获取区县名称（用于组合地址）
             district = addr.get("district", "")
 
-            # 优先级1: 最近的 POI（兴趣点）- 最精确
-            # POI 列表已按距离排序，取第一个有效的
+            # 优先级1: AOI（兴趣面）- 当坐标在区域内部时最准确
+            # distance=0 表示坐标点在该区域内部
+            for aoi in aois:
+                aoi_name = aoi.get("name", "")
+                aoi_distance = aoi.get("distance", "")
+
+                if not aoi_name or aoi_name in ["[]", "无", ""]:
+                    continue
+
+                try:
+                    dist_value = float(aoi_distance)
+                except (ValueError, TypeError):
+                    continue
+
+                # 只有在区域内部（distance=0）才使用 AOI
+                # 这表示坐标点确实在这个园区/公园/小区里面
+                if dist_value == 0:
+                    return f"{district}{aoi_name}"
+
+            # 优先级2: POI（兴趣点）- 100米内的兴趣点
+            # 优先使用 name 字段，因为 address 往往是街道描述，不够直观
             for poi in pois:
                 poi_name = poi.get("name", "")
-                poi_address = poi.get("address", "")
                 poi_distance = poi.get("distance", "")
 
                 if not poi_name or poi_name in ["[]", "无", ""]:
@@ -156,30 +174,8 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
                 if dist_value > 100:
                     continue
 
-                # 优先使用 POI 的 address 字段
-                if poi_address and poi_address not in ["[]", "无", ""]:
-                    return f"{district}{poi_address}"
-
-                # 没有 address 则使用 name
+                # 直接使用 POI 的 name 字段
                 return f"{district}{poi_name}"
-
-            # 优先级2: AOI（兴趣面）- 当前所在的区域
-            # distance=0 表示坐标点在该区域内部
-            for aoi in aois:
-                aoi_name = aoi.get("name", "")
-                aoi_distance = aoi.get("distance", "")
-
-                if not aoi_name or aoi_name in ["[]", "无", ""]:
-                    continue
-
-                try:
-                    dist_value = float(aoi_distance)
-                except (ValueError, TypeError):
-                    continue
-
-                # 在区域内部（distance=0）或非常近（<50米）
-                if dist_value <= 50:
-                    return f"{district}{aoi_name}"
 
             # 优先级3: formatted_address（兜底）
             # 去掉省市前缀，保留区县及以下
