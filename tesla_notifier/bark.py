@@ -222,10 +222,14 @@ async def send_charging_complete(
 ) -> bool:
     """发送充电完成推送"""
     from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(config.timezone)
 
     def format_time(iso_string: str) -> str:
         dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
-        return dt.strftime("%H:%M")
+        local_dt = dt.astimezone(tz)
+        return local_dt.strftime("%H:%M")
 
     def format_duration(minutes: float) -> str:
         hours = int(minutes // 60)
