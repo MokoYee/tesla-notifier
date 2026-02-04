@@ -3,6 +3,8 @@ services:
     image: mokoyee/tesla-notifier:latest
     container_name: tesla-notifier
     restart: unless-stopped
+    volumes:
+      - tesla-notifier-data:/app/data
     environment:
       # 数据库配置（连接 TeslaMate 数据库）
       - DB_HOST=database
@@ -38,3 +40,6 @@ services:
 networks:
   teslamate_default:
     external: true
+
+volumes:
+  tesla-notifier-data:
