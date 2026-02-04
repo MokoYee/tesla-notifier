@@ -339,7 +339,13 @@ async def handle_sentry_deactivated(duration_min: float | None = None) -> None:
     logger.info("========== 检测到哨兵模式关闭 ==========")
 
     try:
-        success = await bark.send_sentry_deactivated(duration_min=duration_min)
+        # 获取当前电量
+        battery_level = mqtt_handler.vehicle_state.battery_level if mqtt_handler else None
+
+        success = await bark.send_sentry_deactivated(
+            duration_min=duration_min,
+            battery_level=battery_level,
+        )
 
         if success:
             logger.info("哨兵关闭推送成功")

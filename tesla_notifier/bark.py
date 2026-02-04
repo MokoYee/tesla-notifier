@@ -470,7 +470,10 @@ async def send_sentry_activated(
 
 
 
-async def send_sentry_deactivated(duration_min: float | None = None) -> bool:
+async def send_sentry_deactivated(
+    duration_min: float | None = None,
+    battery_level: int | None = None,
+) -> bool:
     """发送哨兵模式关闭推送"""
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -492,6 +495,9 @@ async def send_sentry_deactivated(duration_min: float | None = None) -> bool:
             lines.append(f"⏱️ 运行时长: {hours}h {mins}min")
         else:
             lines.append(f"⏱️ 运行时长: {mins}min")
+
+    if battery_level is not None:
+        lines.append(f"🔋 电量: {battery_level}%")
 
     lines.extend([
         "",
