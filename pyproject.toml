@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "tesla-notifier"
 version = "1.1.0"
@@ -20,6 +24,9 @@ dev = [
 
 [project.scripts]
 tesla-notifier = "tesla_notifier.main:main"
+
+[tool.setuptools.packages.find]
+include = ["tesla_notifier*"]
 
 [tool.ruff]
 line-length = 100
