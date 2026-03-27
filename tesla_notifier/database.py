@@ -1,9 +1,10 @@
 """数据库查询模块"""
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -33,7 +34,7 @@ def _format_utc_time(dt: datetime | None) -> str:
     if not dt:
         return ""
     # 将 naive datetime 标记为 UTC 时区
-    utc_dt = dt.replace(tzinfo=timezone.utc)
+    utc_dt = dt.replace(tzinfo=UTC)
     return utc_dt.isoformat()
 
 
@@ -49,7 +50,7 @@ def _local_to_utc(local_dt: datetime) -> datetime:
         UTC 时间的 naive datetime（无时区信息），可直接用于数据库查询
     """
     # 转换为 UTC 时间
-    utc_dt = local_dt.astimezone(timezone.utc)
+    utc_dt = local_dt.astimezone(UTC)
     # 移除时区信息，返回 naive datetime
     return utc_dt.replace(tzinfo=None)
 
@@ -228,7 +229,7 @@ async def resolve_location_name(
             )
             row = await cur.fetchone()
             if row and row[0]:
-                return row[0]
+                return str(row[0])
 
         # 2. 根据 position_id 的经纬度实时匹配 geofence
         latitude: float | None = None
@@ -254,7 +255,7 @@ async def resolve_location_name(
             if row:
                 # 如果匹配到 geofence，直接返回
                 if row[0]:
-                    return row[0]
+                    return str(row[0])
                 # 保存坐标用于高德 API 查询
                 latitude = float(row[1]) if row[1] else None
                 longitude = float(row[2]) if row[2] else None
@@ -438,7 +439,10 @@ async def get_yesterday_summary(car_id: str) -> DrivingSummary | None:
                     SELECT
                         COUNT(*) as trips,
                         COALESCE(SUM(d.distance), 0) as total_distance,
-                        COALESCE(SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)), 0) as rated_range_used,
+                        COALESCE(
+                            SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)),
+                            0
+                        ) as rated_range_used,
                         c.efficiency * 1000 as car_efficiency_wh_km
                     FROM drives d
                     JOIN cars c ON d.car_id = c.id
@@ -464,7 +468,11 @@ async def get_yesterday_summary(car_id: str) -> DrivingSummary | None:
                     return None
 
                 # 计算效率 (Wh/km)，使用车辆动态 efficiency 值
-                efficiency = (rated_range_used * car_efficiency) / distance if distance > 0 else 0
+                efficiency = (
+                    (rated_range_used * car_efficiency) / distance
+                    if distance > 0
+                    else 0
+                )
 
                 return DrivingSummary(
                     total_trips=trips,
@@ -496,7 +504,10 @@ async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
                     SELECT
                         COUNT(*) as trips,
                         COALESCE(SUM(d.distance), 0) as total_distance,
-                        COALESCE(SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)), 0) as rated_range_used,
+                        COALESCE(
+                            SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)),
+                            0
+                        ) as rated_range_used,
                         COALESCE(MAX(d.distance), 0) as longest_trip,
                         COALESCE(SUM(d.duration_min), 0) as total_duration_min,
                         COALESCE(AVG(d.speed_max), 0) as max_speed,
@@ -528,10 +539,18 @@ async def get_weekly_summary(car_id: str) -> DrivingSummary | None:
                     return None
 
                 # 计算效率 (Wh/km)，使用车辆动态 efficiency 值
-                efficiency = (rated_range_used * car_efficiency) / distance if distance > 0 else 0
+                efficiency = (
+                    (rated_range_used * car_efficiency) / distance
+                    if distance > 0
+                    else 0
+                )
 
                 # 计算平均速度（km/h）
-                avg_speed = (distance / (total_duration_min / 60.0)) if total_duration_min > 0 else 0
+                avg_speed = (
+                    distance / (total_duration_min / 60.0)
+                    if total_duration_min > 0
+                    else 0
+                )
 
                 # 查询充电统计
                 await cur.execute(
@@ -594,7 +613,10 @@ async def get_monthly_summary(car_id: str) -> DrivingSummary | None:
                     SELECT
                         COUNT(*) as trips,
                         COALESCE(SUM(d.distance), 0) as total_distance,
-                        COALESCE(SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)), 0) as rated_range_used,
+                        COALESCE(
+                            SUM(GREATEST(d.start_rated_range_km - d.end_rated_range_km, 0)),
+                            0
+                        ) as rated_range_used,
                         COALESCE(MAX(d.distance), 0) as longest_trip,
                         c.efficiency * 1000 as car_efficiency_wh_km
                     FROM drives d
@@ -622,7 +644,11 @@ async def get_monthly_summary(car_id: str) -> DrivingSummary | None:
                     return None
 
                 # 计算效率 (Wh/km)，使用车辆动态 efficiency 值
-                efficiency = (rated_range_used * car_efficiency) / distance if distance > 0 else 0
+                efficiency = (
+                    (rated_range_used * car_efficiency) / distance
+                    if distance > 0
+                    else 0
+                )
 
                 return DrivingSummary(
                     total_trips=trips,
@@ -773,7 +799,10 @@ def _count_hard_accel_events(power_data: list[tuple[float, datetime]]) -> int:
         power, timestamp = power_data[i]
 
         # 检查冷却期
-        if last_event_time and (timestamp - last_event_time).total_seconds() < ACCEL_COOLDOWN_SEC:
+        if (
+            last_event_time
+            and (timestamp - last_event_time).total_seconds() < ACCEL_COOLDOWN_SEC
+        ):
             continue
 
         # 计算窗口内的最小功率
@@ -826,7 +855,10 @@ def _count_hard_brake_events(speed_data: list[tuple[float, datetime]]) -> int:
             continue
 
         # 检查冷却期
-        if last_event_time and (current_time - last_event_time).total_seconds() < BRAKE_COOLDOWN_SEC:
+        if (
+            last_event_time
+            and (current_time - last_event_time).total_seconds() < BRAKE_COOLDOWN_SEC
+        ):
             continue
 
         # 获取窗口内的数据，找到最高速度点
@@ -915,4 +947,3 @@ async def get_trip_driving_score(drive_id: int) -> DrivingScore | None:
     except Exception as e:
         logger.exception(f"查询行程驾驶评分失败: {e}")
         return None
-

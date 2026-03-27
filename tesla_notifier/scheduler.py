@@ -1,12 +1,15 @@
 """定时任务模块"""
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from collections.abc import Awaitable, Callable
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
+from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
 
 from tesla_notifier.config import config
 from tesla_notifier.logger import setup_logger
 
 logger = setup_logger("scheduler")
+TaskFunc = Callable[[], Awaitable[None]]
 
 
 def parse_cron(cron_expr: str) -> CronTrigger:
@@ -30,11 +33,11 @@ class Scheduler:
 
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler(timezone=config.timezone)
-        self._daily_task: object = None
-        self._weekly_task: object = None
-        self._monthly_task: object = None
+        self._daily_task: object | None = None
+        self._weekly_task: object | None = None
+        self._monthly_task: object | None = None
 
-    def add_daily_task(self, func: object) -> None:
+    def add_daily_task(self, func: TaskFunc) -> None:
         """添加每日任务"""
         trigger = parse_cron(config.daily_cron)
         self._daily_task = self._scheduler.add_job(
@@ -45,7 +48,7 @@ class Scheduler:
         )
         logger.info(f"每日简报任务已配置: {config.daily_cron}")
 
-    def add_weekly_task(self, func: object) -> None:
+    def add_weekly_task(self, func: TaskFunc) -> None:
         """添加周报任务"""
         trigger = parse_cron(config.weekly_cron)
         self._weekly_task = self._scheduler.add_job(
@@ -56,7 +59,7 @@ class Scheduler:
         )
         logger.info(f"周报任务已配置: {config.weekly_cron}")
 
-    def add_monthly_task(self, func: object) -> None:
+    def add_monthly_task(self, func: TaskFunc) -> None:
         """添加月报任务"""
         trigger = parse_cron(config.monthly_cron)
         self._monthly_task = self._scheduler.add_job(
@@ -84,4 +87,4 @@ class Scheduler:
     @property
     def is_running(self) -> bool:
         """是否正在运行"""
-        return self._scheduler.running
+        return bool(self._scheduler.running)

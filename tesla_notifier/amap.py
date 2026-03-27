@@ -9,6 +9,7 @@
 """
 
 import math
+from typing import Any
 
 import httpx
 
@@ -123,27 +124,44 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
                 return None
 
             data = response.json()
+            if not isinstance(data, dict):
+                logger.warning("高德 API 返回格式异常")
+                return None
 
             if data.get("status") != "1":
                 logger.warning(f"高德 API 返回错误: {data.get('info', '未知错误')}")
                 return None
 
-            regeocode = data.get("regeocode", {})
-            addr = regeocode.get("addressComponent", {})
-            aois = regeocode.get("aois", [])
-            pois = regeocode.get("pois", [])
-            formatted_address = regeocode.get("formatted_address", "")
+            regeocode_raw = data.get("regeocode", {})
+            regeocode: dict[str, Any] = (
+                regeocode_raw if isinstance(regeocode_raw, dict) else {}
+            )
+            addr_raw = regeocode.get("addressComponent", {})
+            addr: dict[str, Any] = addr_raw if isinstance(addr_raw, dict) else {}
+            aois_raw = regeocode.get("aois", [])
+            aois = aois_raw if isinstance(aois_raw, list) else []
+            pois_raw = regeocode.get("pois", [])
+            pois = pois_raw if isinstance(pois_raw, list) else []
+            formatted_address_raw = regeocode.get("formatted_address", "")
+            formatted_address = (
+                formatted_address_raw
+                if isinstance(formatted_address_raw, str)
+                else ""
+            )
 
             # 获取区县名称（用于组合地址）
-            district = addr.get("district", "")
+            district_raw = addr.get("district", "")
+            district = district_raw if isinstance(district_raw, str) else ""
 
             # 优先级1: AOI（兴趣面）- 当坐标在区域内部时最准确
             # distance=0 表示坐标点在该区域内部
             for aoi in aois:
+                if not isinstance(aoi, dict):
+                    continue
                 aoi_name = aoi.get("name", "")
                 aoi_distance = aoi.get("distance", "")
 
-                if not aoi_name or aoi_name in ["[]", "无", ""]:
+                if not isinstance(aoi_name, str) or aoi_name in ["[]", "无", ""]:
                     continue
 
                 try:
@@ -159,10 +177,12 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
             # 优先级2: POI（兴趣点）- 100米内的兴趣点
             # 优先使用 name 字段，因为 address 往往是街道描述，不够直观
             for poi in pois:
+                if not isinstance(poi, dict):
+                    continue
                 poi_name = poi.get("name", "")
                 poi_distance = poi.get("distance", "")
 
-                if not poi_name or poi_name in ["[]", "无", ""]:
+                if not isinstance(poi_name, str) or poi_name in ["[]", "无", ""]:
                     continue
 
                 try:
@@ -180,8 +200,10 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
             # 优先级3: formatted_address（兜底）
             # 去掉省市前缀，保留区县及以下
             if formatted_address:
-                province = addr.get("province", "")
-                city = addr.get("city", "")
+                province_raw = addr.get("province", "")
+                province = province_raw if isinstance(province_raw, str) else ""
+                city_raw = addr.get("city", "")
+                city = city_raw if isinstance(city_raw, str) else ""
 
                 result = formatted_address
                 # 去掉省份前缀
