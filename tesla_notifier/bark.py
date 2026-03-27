@@ -177,7 +177,14 @@ async def send_trip_end(
     outside_temp: float | None = None,
     hard_accel_count: int | None = None,
     hard_brake_count: int | None = None,
-    driving_grade: str | None = None,
+    driving_score: int | None = None,
+    driving_label: str | None = None,
+    road_context: str | None = None,
+    analysis_summary: str | None = None,
+    analysis_advice: str | None = None,
+    traffic_label: str | None = None,
+    traffic_summary: str | None = None,
+    traffic_sample_count: int | None = None,
     speed_avg: float | None = None,
     speed_max: float | None = None,
     odometer: float | None = None,
@@ -234,12 +241,29 @@ async def send_trip_end(
     if (
         hard_accel_count is not None
         and hard_brake_count is not None
-        and driving_grade is not None
+        and driving_score is not None
+        and driving_label is not None
     ):
-        lines.append(
-            "🏁 驾驶评分: "
-            f"急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）"
-        )
+        lines.append(f"🏁 驾驶评分 {driving_score} 分 · {driving_label}")
+        detail_line = f"急加速{hard_accel_count}次 · 急减速{hard_brake_count}次"
+        if road_context:
+            detail_line = f"{road_context} · {detail_line}"
+        lines.append(f"🧭 {detail_line}")
+
+    if traffic_label:
+        traffic_line = traffic_label
+        if traffic_sample_count:
+            traffic_line = f"{traffic_line} · 采样{traffic_sample_count}次"
+        lines.append(f"🚦 路况 {traffic_line}")
+
+    if traffic_summary:
+        lines.append(f"🗺️ 交通 {traffic_summary}")
+
+    if analysis_summary:
+        lines.append(f"🧠 分析 {analysis_summary}")
+
+    if analysis_advice:
+        lines.append(f"💡 建议 {analysis_advice}")
 
     return await send_notification(
         BarkOptions(
@@ -371,9 +395,6 @@ async def send_monthly_report(
     total_distance: float,
     avg_efficiency: float,
     longest_trip: float,
-    hard_accel_count: int | None = None,
-    hard_brake_count: int | None = None,
-    driving_grade: str | None = None,
 ) -> bool:
     """发送月报"""
     subtitle = _join_subtitle_parts(
@@ -386,16 +407,6 @@ async def send_monthly_report(
         f"⚡ 平均能耗 {avg_efficiency:.1f} Wh/km",
         f"🏆 最长行程 {longest_trip:.1f} km",
     ]
-
-    if (
-        hard_accel_count is not None
-        and hard_brake_count is not None
-        and driving_grade is not None
-    ):
-        lines.append(
-            "🏁 驾驶评分: "
-            f"急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）"
-        )
 
     return await send_notification(
         BarkOptions(

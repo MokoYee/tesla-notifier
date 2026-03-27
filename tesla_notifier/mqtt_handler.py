@@ -26,6 +26,10 @@ AsyncSentryDeactivatedCallback = Callable[
     [float | None, int | None, int],
     Coroutine[Any, Any, None],
 ]
+AsyncPositionCallback = Callable[
+    [float | None, float | None],
+    Coroutine[Any, Any, None],
+]
 
 
 @dataclass
@@ -78,6 +82,8 @@ class MqttHandler:
     """MQTT 消息处理器"""
 
     car_id: str
+    on_trip_started: AsyncCallback | None = None
+    on_trip_stopped: AsyncCallback | None = None
     on_trip_end: AsyncCallback | None = None
     on_charging_complete: AsyncCallback | None = None
     on_sentry_activated: AsyncCallback | None = None
@@ -86,6 +92,7 @@ class MqttHandler:
     on_departure_safety_alert: AsyncCallback | None = None
     on_tire_pressure_alert: AsyncCallback | None = None
     on_charging_issue_alert: AsyncCallback | None = None
+    on_position_update: AsyncPositionCallback | None = None
 
     client: mqtt.Client | None = None
     vehicle_state: VehicleState = field(default_factory=VehicleState)
@@ -226,8 +233,15 @@ class MqttHandler:
 
         logger.info(f"state 变化: {prev_state} -> {payload}")
 
+        if payload == "driving" and prev_state != "driving":
+            logger.info(f"检测到行程开始: {prev_state} -> {payload}")
+            if self.on_trip_started and self._loop:
+                self._schedule_callback(self.on_trip_started)
+
         if prev_state == "driving" and payload in ("online", "asleep"):
             logger.info(f"检测到行程结束: {prev_state} -> {payload}")
+            if self.on_trip_stopped and self._loop:
+                self._schedule_callback(self.on_trip_stopped)
             if self.on_trip_end and self._loop:
                 logger.info("将在 3 秒后触发行程结束处理")
                 asyncio.run_coroutine_threadsafe(
@@ -619,6 +633,18 @@ class MqttHandler:
             return
 
         setattr(self.vehicle_state, attr_name, current_value)
+        if (
+            attr_name in {"latitude", "longitude"}
+            and self.on_position_update
+            and self._loop
+        ):
+            self._loop.call_soon_threadsafe(
+                self._create_task,
+                self.on_position_update(
+                    self.vehicle_state.latitude,
+                    self.vehicle_state.longitude,
+                ),
+            )
 
     @staticmethod
     def _parse_bool(payload: str) -> bool | None:

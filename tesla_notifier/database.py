@@ -12,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from tesla_notifier.config import config
 from tesla_notifier.logger import setup_logger
+from tesla_notifier.traffic import TrafficSummary
 
 logger = setup_logger("database")
 
@@ -138,9 +139,31 @@ class DrivingSummary:
 class DrivingScore:
     """驾驶评分"""
 
-    hard_accel_count: int  # 急加速次数 (power >= 100kW)
-    hard_brake_count: int  # 急减速次数 (power <= -55kW)
-    grade: str  # 评分等级 A/B/C/D
+    hard_accel_count: int  # 急加速次数
+    hard_brake_count: int  # 急减速次数
+    score: int  # 100 分制总分
+    label: str  # 分档标签，如“优秀 / 稳健 / 正常 / 需注意 / 激进”
+    road_context: str  # 路况标签，如“城市通勤 / 高速巡航 / 综合路况”
+    hard_accel_rate: float  # 每 100 km 急加速次数
+    hard_brake_rate: float  # 每 100 km 急减速次数
+    confidence: float  # 样本置信度，主要用于短途平滑
+    analysis_summary: str  # 自动分析摘要
+    advice: str  # 自动建议
+    traffic_label: str | None = None  # 行程交通画像
+    traffic_summary: str | None = None  # 行程交通摘要
+    traffic_sample_count: int = 0  # 路况采样次数
+    traffic_stress_index: float | None = None  # 路况压力指数
+
+
+@dataclass
+class DrivingContext:
+    """驾驶场景上下文"""
+
+    urban_ratio: float  # 城市中低速场景占比
+    highway_ratio: float  # 高速巡航场景占比
+    overspeed_ratio: float  # 超高速占比（>120 km/h）
+    stop_go_density: float  # 每 10 km 停走事件数
+    road_context: str  # 路况标签
 
 
 async def init_pool() -> None:
@@ -718,29 +741,304 @@ async def get_vehicle_last_position(car_id: str) -> tuple[int, float, float] | N
         return None
 
 
-def _calculate_grade(hard_accel_count: int, hard_brake_count: int) -> str:
-    """根据急加速和急减速次数计算评分等级
+def _clamp(value: float, lower: float, upper: float) -> float:
+    """限制数值范围"""
+    return max(lower, min(value, upper))
 
-    评分规则:
-        A: 急加速<5次 且 急减速<3次
-        B: 急加速<10次 且 急减速<6次
-        C: 急加速<20次 且 急减速<12次
-        D: 其他
+
+def _rate_per_100km(event_count: int, distance_km: float) -> float:
+    """将事件数归一化为每 100 km 频次"""
+    if distance_km <= 0:
+        return 0.0
+    return (event_count / distance_km) * 100
+
+
+def _calculate_score_label(score: int) -> str:
+    """根据 100 分制总分输出中文标签"""
+    if score >= 92:
+        return "优秀"
+    if score >= 85:
+        return "稳健"
+    if score >= 75:
+        return "正常"
+    if score >= 65:
+        return "需注意"
+    return "激进"
+
+
+def _classify_road_context(
+    urban_ratio: float,
+    highway_ratio: float,
+    stop_go_density: float,
+) -> str:
+    """根据速度结构和停走密度识别大致路况"""
+    if stop_go_density >= 4.0 or urban_ratio >= 0.65:
+        return "城市通勤"
+    if highway_ratio >= 0.65:
+        return "高速巡航"
+    return "综合路况"
+
+
+def _build_driving_context(
+    speed_data: list[tuple[float, datetime]],
+    distance_km: float,
+) -> DrivingContext:
+    """从速度序列中提取路况上下文
+
+    这里不依赖外部地图 API，只基于 TeslaMate 已有速度轨迹估算。
     """
-    if hard_accel_count < 5 and hard_brake_count < 3:
-        return "A"
-    elif hard_accel_count < 10 and hard_brake_count < 6:
-        return "B"
-    elif hard_accel_count < 20 and hard_brake_count < 12:
-        return "C"
+    if len(speed_data) < 2:
+        return DrivingContext(
+            urban_ratio=0.4,
+            highway_ratio=0.2,
+            overspeed_ratio=0.0,
+            stop_go_density=0.0,
+            road_context="综合路况",
+        )
+
+    moving_seconds = 0.0
+    urban_seconds = 0.0
+    highway_seconds = 0.0
+    overspeed_seconds = 0.0
+    stop_go_events = 0
+
+    prev_speed, prev_time = speed_data[0]
+
+    for current_speed, current_time in speed_data[1:]:
+        interval_seconds = (current_time - prev_time).total_seconds()
+        weighted_seconds = _clamp(interval_seconds, 0.0, 10.0)
+
+        if prev_speed >= 10 and weighted_seconds > 0:
+            moving_seconds += weighted_seconds
+
+            if prev_speed < 60:
+                urban_seconds += weighted_seconds
+            if prev_speed >= 80:
+                highway_seconds += weighted_seconds
+            if prev_speed >= 120:
+                overspeed_seconds += weighted_seconds
+
+        # 识别典型停走场景：前一时刻仍在行驶，下一时刻已接近停车。
+        if (
+            interval_seconds > 0
+            and interval_seconds <= 20
+            and prev_speed >= 20
+            and current_speed <= 5
+        ):
+            stop_go_events += 1
+
+        prev_speed, prev_time = current_speed, current_time
+
+    if moving_seconds <= 0:
+        urban_ratio = 0.4
+        highway_ratio = 0.2
+        overspeed_ratio = 0.0
     else:
-        return "D"
+        urban_ratio = urban_seconds / moving_seconds
+        highway_ratio = highway_seconds / moving_seconds
+        overspeed_ratio = overspeed_seconds / moving_seconds
+
+    stop_go_density = (stop_go_events / max(distance_km, 1.0)) * 10
+    road_context = _classify_road_context(urban_ratio, highway_ratio, stop_go_density)
+
+    return DrivingContext(
+        urban_ratio=urban_ratio,
+        highway_ratio=highway_ratio,
+        overspeed_ratio=overspeed_ratio,
+        stop_go_density=stop_go_density,
+        road_context=road_context,
+    )
+
+
+def _get_expected_event_rates(context: DrivingContext) -> tuple[float, float]:
+    """根据路况上下文估算可接受的动作基线
+
+    核心目标不是“零急加速 / 零急刹”，而是允许城市通勤、高速巡航有不同基线。
+    """
+    expected_accel_rate = (
+        3.0
+        + 3.5 * context.urban_ratio
+        + 1.5 * context.highway_ratio
+        + 0.7 * context.stop_go_density
+    )
+    expected_brake_rate = (
+        2.0
+        + 5.5 * context.urban_ratio
+        + 0.5 * context.highway_ratio
+        + 1.2 * context.stop_go_density
+    )
+
+    return (
+        _clamp(expected_accel_rate, 2.5, 12.0),
+        _clamp(expected_brake_rate, 1.5, 14.0),
+    )
+
+
+def _apply_traffic_tolerance(
+    expected_accel_rate: float,
+    expected_brake_rate: float,
+    traffic_summary: TrafficSummary | None,
+) -> tuple[float, float]:
+    """根据行程中的外部路况压力，适度放宽动作基线。"""
+    if traffic_summary is None or traffic_summary.sample_count <= 0:
+        return expected_accel_rate, expected_brake_rate
+
+    pressure_factor = _clamp(traffic_summary.stress_index / 100.0, 0.0, 1.0)
+    accel_buffer = pressure_factor * 1.6
+    brake_buffer = pressure_factor * 3.8
+
+    if traffic_summary.high_pressure_ratio >= 0.5:
+        brake_buffer += 0.8
+
+    return (
+        _clamp(expected_accel_rate + accel_buffer, 2.5, 14.5),
+        _clamp(expected_brake_rate + brake_buffer, 1.5, 18.0),
+    )
+
+
+def _calculate_excess_penalty(
+    actual_rate: float,
+    expected_rate: float,
+    max_penalty: float,
+) -> float:
+    """按“基线内轻扣分、超基线重扣分”的方式计算事件扣分"""
+    baseline_usage = _clamp(actual_rate / max(expected_rate, 1.0), 0.0, 1.0)
+    base_penalty = baseline_usage * max_penalty * 0.18
+
+    if actual_rate <= expected_rate:
+        return base_penalty
+
+    excess_ratio = (actual_rate - expected_rate) / max(expected_rate, 1.0)
+    excess_penalty = _clamp(
+        excess_ratio * max_penalty * 0.72,
+        0.0,
+        max_penalty - base_penalty,
+    )
+    return base_penalty + excess_penalty
+
+
+def _calculate_speed_discipline_penalty(
+    speed_data: list[tuple[float, datetime]],
+    context: DrivingContext,
+) -> float:
+    """基于超高速占比与峰值速度进行附加扣分"""
+    if not speed_data:
+        return 0.0
+
+    max_speed = max(speed for speed, _ in speed_data)
+    overspeed_penalty = _clamp(context.overspeed_ratio * 18.0, 0.0, 10.0)
+    peak_penalty = 0.0
+
+    if max_speed > 130:
+        peak_penalty = _clamp(((max_speed - 130) / 10.0) * 2.5, 0.0, 6.0)
+
+    return min(14.0, overspeed_penalty + peak_penalty)
+
+
+def _build_driving_analysis(
+    context: DrivingContext,
+    hard_accel_rate: float,
+    hard_brake_rate: float,
+    expected_accel_rate: float,
+    expected_brake_rate: float,
+    confidence: float,
+    traffic_summary: TrafficSummary | None,
+) -> tuple[str, str]:
+    """生成自动分析摘要与建议
+
+    目标是把评分结果解释成“为什么是这个分数”，而不是只给一个数字。
+    """
+    context_prefix = {
+        "城市通勤": "本次以城市通勤为主",
+        "高速巡航": "本次以高速巡航为主",
+        "综合路况": "本次路况较为综合",
+    }.get(context.road_context, "本次路况较为综合")
+    traffic_clause = _build_traffic_clause(traffic_summary)
+
+    accel_ratio = hard_accel_rate / max(expected_accel_rate, 1.0)
+    brake_ratio = hard_brake_rate / max(expected_brake_rate, 1.0)
+
+    positives: list[str] = []
+    cautions: list[str] = []
+
+    if accel_ratio <= 0.6:
+        positives.append("提速动作较克制")
+    elif accel_ratio >= 1.35:
+        cautions.append("提速偏急")
+
+    if brake_ratio <= 0.7:
+        positives.append("制动预判较稳")
+    elif brake_ratio >= 1.2:
+        cautions.append("制动偏多")
+
+    if context.overspeed_ratio >= 0.12:
+        cautions.append("高速阶段车速偏快")
+
+    if confidence < 0.35:
+        summary_parts = [context_prefix]
+        if traffic_clause:
+            summary_parts.append(traffic_clause)
+        summary = "，".join(summary_parts) + "，但行程较短，当前结果更适合作为趋势参考。"
+        return summary, "建议结合后续多次行程一起观察，避免对超短途过度解读。"
+
+    summary_parts = [context_prefix]
+    if traffic_clause:
+        summary_parts.append(traffic_clause)
+
+    if cautions:
+        primary_issue = cautions[0]
+        summary = "，".join(summary_parts + [primary_issue]) + "。"
+    elif positives:
+        summary = "，".join(summary_parts + [positives[0]]) + "，整体节奏较平顺。"
+    else:
+        summary = "，".join(summary_parts) + "，整体驾驶表现基本稳定。"
+
+    if "制动偏多" in cautions:
+        if traffic_summary and traffic_summary.high_pressure_ratio >= 0.5:
+            advice = "本次拥堵路段较多，建议进一步拉开跟车距离，减少跟停带来的急刹。"
+        else:
+            advice = "建议提前观察前车与路口变化，尽量更早松电并预留车距。"
+    elif "提速偏急" in cautions:
+        if traffic_summary and traffic_summary.high_pressure_ratio >= 0.5:
+            advice = "拥堵路段频繁补电门收益有限，建议减少二次提速，节奏会更稳。"
+        else:
+            advice = "建议减少连续深踩电门，拉开提速节奏会更稳。"
+    elif "高速阶段车速偏快" in cautions:
+        advice = "建议高速阶段更早收电控制车速，保持更稳定的巡航区间。"
+    elif (
+        traffic_summary
+        and traffic_summary.traffic_label in {"高压拥堵", "明显拥堵"}
+    ):
+        advice = "本次外部路况压力较高，评分已按拥堵情况做缓冲，继续保持提前预判即可。"
+    elif context.road_context == "城市通勤":
+        advice = "城市路况波动较大，继续保持当前预判和跟车节奏即可。"
+    elif context.road_context == "高速巡航":
+        advice = "高速路况下保持均匀提速和稳定巡航，有助于长期维持高分。"
+    else:
+        advice = "继续保持平顺提速和提前预判，分数会更稳定。"
+
+    return summary, advice
+
+
+def _build_traffic_clause(traffic_summary: TrafficSummary | None) -> str | None:
+    """把交通画像转成适合拼接到分析摘要中的短句。"""
+    if traffic_summary is None or traffic_summary.sample_count <= 0:
+        return None
+
+    return {
+        "高压拥堵": "沿途拥堵压力较高",
+        "明显拥堵": "沿途缓行较多",
+        "轻度拥堵": "沿途有轻度拥堵",
+        "整体畅通": "沿途整体较为畅通",
+    }.get(traffic_summary.traffic_label, None)
 
 
 # ========== 急加速/急减速检测算法 ==========
 # 急加速检测参数
 ACCEL_SURGE_THRESHOLD = 50  # 功率突增阈值 (kW)，窗口内功率变化超过此值
 ACCEL_PEAK_THRESHOLD = 40   # 峰值功率阈值 (kW)，当前功率需达到此值
+ACCEL_SPEED_GAIN_MIN = 8    # 最小速度增量 (km/h)，避免把普通补电门误判为急加速
+ACCEL_MIN_SPEED = 15        # 最低速度限制 (km/h)，排除挪车和低速蠕行
 ACCEL_WINDOW_SIZE = 5       # 检测窗口大小（数据点数）
 ACCEL_COOLDOWN_SEC = 3      # 冷却时间（秒），避免同一次加速重复计数
 
@@ -774,29 +1072,34 @@ def _get_brake_threshold(speed_kmh: float) -> float:
         return 7.5  # 低速更严格
 
 
-def _count_hard_accel_events(power_data: list[tuple[float, datetime]]) -> int:
+def _count_hard_accel_events(motion_data: list[tuple[float, float, datetime]]) -> int:
     """计算急加速事件数量
 
-    算法：检测功率突增事件
+    算法：检测“功率突增 + 速度明显提升”的复合事件
     - 在 ACCEL_WINDOW_SIZE 个数据点的窗口内，如果功率从窗口最小值突增超过 ACCEL_SURGE_THRESHOLD
     - 且当前功率达到 ACCEL_PEAK_THRESHOLD
+    - 且窗口内速度提升达到 ACCEL_SPEED_GAIN_MIN
+    - 且当前速度 >= ACCEL_MIN_SPEED
     - 则计为 1 次急加速事件
     - 事件之间需要间隔 ACCEL_COOLDOWN_SEC 秒才算新事件
 
     Args:
-        power_data: [(power, timestamp), ...] 按时间排序的功率数据
+        motion_data: [(power, speed, timestamp), ...] 按时间排序的轨迹数据
 
     Returns:
         急加速事件数量
     """
-    if len(power_data) < ACCEL_WINDOW_SIZE + 1:
+    if len(motion_data) < ACCEL_WINDOW_SIZE + 1:
         return 0
 
     events = 0
     last_event_time: datetime | None = None
 
-    for i in range(ACCEL_WINDOW_SIZE, len(power_data)):
-        power, timestamp = power_data[i]
+    for i in range(ACCEL_WINDOW_SIZE, len(motion_data)):
+        power, speed, timestamp = motion_data[i]
+
+        if speed < ACCEL_MIN_SPEED:
+            continue
 
         # 检查冷却期
         if (
@@ -805,14 +1108,20 @@ def _count_hard_accel_events(power_data: list[tuple[float, datetime]]) -> int:
         ):
             continue
 
-        # 计算窗口内的最小功率
-        window_min = min(d[0] for d in power_data[i - ACCEL_WINDOW_SIZE : i])
+        window_slice = motion_data[i - ACCEL_WINDOW_SIZE : i]
+        window_min_power = min(d[0] for d in window_slice)
+        window_min_speed = min(d[1] for d in window_slice)
 
         # 计算功率突增量
-        power_surge = power - window_min
+        power_surge = power - window_min_power
+        speed_gain = speed - window_min_speed
 
         # 判断是否为急加速事件
-        if power_surge >= ACCEL_SURGE_THRESHOLD and power >= ACCEL_PEAK_THRESHOLD:
+        if (
+            power_surge >= ACCEL_SURGE_THRESHOLD
+            and power >= ACCEL_PEAK_THRESHOLD
+            and speed_gain >= ACCEL_SPEED_GAIN_MIN
+        ):
             events += 1
             last_event_time = timestamp
 
@@ -895,20 +1204,30 @@ def _count_hard_brake_events(speed_data: list[tuple[float, datetime]]) -> int:
     return events
 
 
-async def get_trip_driving_score(drive_id: int) -> DrivingScore | None:
+async def get_trip_driving_score(
+    drive_id: int,
+    traffic_summary: TrafficSummary | None = None,
+) -> DrivingScore | None:
     """获取单次行程的驾驶评分
 
-    急加速检测：功率突增算法
-        - 窗口内功率突增 >= 50kW 且峰值 >= 40kW
-        - 冷却时间 3 秒
-
-    急减速检测：速度变化率算法
-        - 减速率 >= 7 km/h/s 且速度下降 >= 8 km/h
-        - 冷却时间 3 秒
+    评分采用 100 分制，并引入按里程归一化和路况修正，避免：
+    1. 长途因为“绝对事件数更多”而天然吃亏
+    2. 短途因为样本太少而轻易拿到高分
     """
     try:
         async with get_connection() as conn:
             async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT distance
+                    FROM drives
+                    WHERE id = %s
+                    """,
+                    (drive_id,),
+                )
+                drive_row = await cur.fetchone()
+                distance_km = float(drive_row[0]) if drive_row and drive_row[0] else 0.0
+
                 # 获取该行程的所有位置数据（按时间排序）
                 await cur.execute(
                     """
@@ -924,9 +1243,11 @@ async def get_trip_driving_score(drive_id: int) -> DrivingScore | None:
                 if not rows:
                     return None
 
-                # 转换为功率数据列表（用于急加速检测）
-                power_data: list[tuple[float, datetime]] = [
-                    (float(row[0]), row[2]) for row in rows if row[0] is not None
+                # 转换为轨迹数据列表（用于急加速检测）
+                motion_data: list[tuple[float, float, datetime]] = [
+                    (float(row[0]), float(row[1]), row[2])
+                    for row in rows
+                    if row[0] is not None and row[1] is not None
                 ]
 
                 # 转换为速度数据列表（用于急减速检测）
@@ -935,14 +1256,79 @@ async def get_trip_driving_score(drive_id: int) -> DrivingScore | None:
                 ]
 
                 # 计算急加速和急减速事件数
-                hard_accel_count = _count_hard_accel_events(power_data)
+                hard_accel_count = _count_hard_accel_events(motion_data)
                 hard_brake_count = _count_hard_brake_events(speed_data)
-                grade = _calculate_grade(hard_accel_count, hard_brake_count)
+                hard_accel_rate = _rate_per_100km(hard_accel_count, distance_km)
+                hard_brake_rate = _rate_per_100km(hard_brake_count, distance_km)
+
+                context = _build_driving_context(speed_data, distance_km)
+                expected_accel_rate, expected_brake_rate = _get_expected_event_rates(
+                    context
+                )
+                expected_accel_rate, expected_brake_rate = _apply_traffic_tolerance(
+                    expected_accel_rate,
+                    expected_brake_rate,
+                    traffic_summary,
+                )
+
+                smooth_penalty = _calculate_excess_penalty(
+                    hard_accel_rate,
+                    expected_accel_rate,
+                    max_penalty=18.0,
+                ) + _calculate_excess_penalty(
+                    hard_brake_rate,
+                    expected_brake_rate,
+                    max_penalty=22.0,
+                )
+                speed_penalty = _calculate_speed_discipline_penalty(speed_data, context)
+                raw_score = 100.0 - smooth_penalty - speed_penalty
+
+                # 短途样本天然偏少，向中性分数回归，避免一两次停车就把分数拉爆。
+                confidence = _clamp(distance_km / 15.0, 0.0, 1.0)
+                blended_score = raw_score * confidence + 85.0 * (1.0 - confidence)
+                final_score = round(_clamp(blended_score, 0.0, 100.0))
+                label = _calculate_score_label(final_score)
+                analysis_summary, advice = _build_driving_analysis(
+                    context,
+                    hard_accel_rate,
+                    hard_brake_rate,
+                    expected_accel_rate,
+                    expected_brake_rate,
+                    confidence,
+                    traffic_summary,
+                )
 
                 return DrivingScore(
                     hard_accel_count=hard_accel_count,
                     hard_brake_count=hard_brake_count,
-                    grade=grade,
+                    score=final_score,
+                    label=label,
+                    road_context=context.road_context,
+                    hard_accel_rate=hard_accel_rate,
+                    hard_brake_rate=hard_brake_rate,
+                    confidence=confidence,
+                    analysis_summary=analysis_summary,
+                    advice=advice,
+                    traffic_label=(
+                        traffic_summary.traffic_label
+                        if traffic_summary is not None
+                        else None
+                    ),
+                    traffic_summary=(
+                        traffic_summary.summary
+                        if traffic_summary is not None
+                        else None
+                    ),
+                    traffic_sample_count=(
+                        traffic_summary.sample_count
+                        if traffic_summary is not None
+                        else 0
+                    ),
+                    traffic_stress_index=(
+                        traffic_summary.stress_index
+                        if traffic_summary is not None
+                        else None
+                    ),
                 )
     except Exception as e:
         logger.exception(f"查询行程驾驶评分失败: {e}")

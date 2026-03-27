@@ -52,6 +52,15 @@
 | `CAIYUN_TOKEN` | 空 | 否 | 彩云天气 token，配置后天气信息更完整 |
 | `AMAP_KEY` | 空 | 否 | 高德地图 key，用于更准确的中文地址解析 |
 
+## 行程路况分析
+
+| 变量 | 默认值 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `TRAFFIC_ANALYSIS_ENABLED` | `OFF` | 否 | 是否开启行程中高德路况低频采样，并将结果并入驾驶评分 |
+| `TRAFFIC_SAMPLE_INTERVAL` | `300` | 否 | 两次路况采样之间的最小时间间隔（秒） |
+| `TRAFFIC_SAMPLE_MIN_DISTANCE_KM` | `3` | 否 | 车辆位移达到该距离时，即使未到时间阈值也会补采一次 |
+| `TRAFFIC_QUERY_RADIUS` | `1000` | 否 | 高德交通态势查询半径（米），官方上限 `4999` |
+
 ## 车辆与通用配置
 
 | 变量 | 默认值 | 必填 | 说明 |
@@ -84,6 +93,7 @@ ENABLE_CRON=true
 
 BARK_KEY=your_bark_key
 AMAP_KEY=your_amap_key
+TRAFFIC_ANALYSIS_ENABLED=ON
 
 SENTRY_NOTIFY_ENABLED=ON
 DEPARTURE_SAFETY_NOTIFY_ENABLED=ON
@@ -96,3 +106,5 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 - 当前哨兵逻辑不再依赖任何“功率阈值”配置。
 - 哨兵录制事件基于 TeslaMate MQTT 实时状态判断，并使用 `SENTRY_RECORDING_COOLDOWN` 防重复推送。
 - 如果你只想用实时通知，可以保留 `ENABLE_MQTT=true`，并按需关闭 `ENABLE_CRON`。
+- 行程路况分析使用本地 JSON 缓存，不会额外引入数据库；缓存目录默认为 `./data/traffic_snapshots/`。
+- 根据高德官方文档，交通态势查询属于高级服务接口；如果 key 没有权限，服务会自动跳过路况采样，不影响基础通知。

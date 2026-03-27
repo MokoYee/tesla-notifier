@@ -56,6 +56,11 @@ def _wgs84_to_gcj02(lat: float, lon: float) -> tuple[float, float]:
     return mglat, mglon
 
 
+def wgs84_to_gcj02(latitude: float, longitude: float) -> tuple[float, float]:
+    """对外暴露的坐标转换方法。"""
+    return _wgs84_to_gcj02(latitude, longitude)
+
+
 def _out_of_china(lat: float, lon: float) -> bool:
     """判断是否在中国境外"""
     return not (72.004 <= lon <= 137.8347 and 0.8293 <= lat <= 55.8271)
@@ -106,7 +111,7 @@ async def reverse_geocode(latitude: float, longitude: float) -> str | None:
 
     try:
         # WGS-84 转 GCJ-02（高德地图使用火星坐标系）
-        gcj_lat, gcj_lon = _wgs84_to_gcj02(latitude, longitude)
+        gcj_lat, gcj_lon = wgs84_to_gcj02(latitude, longitude)
 
         params = {
             "key": config.amap_key,

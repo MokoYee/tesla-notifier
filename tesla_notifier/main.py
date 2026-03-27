@@ -16,6 +16,7 @@ from tesla_notifier.logger import setup_logger
 from tesla_notifier.mqtt_handler import MqttHandler
 from tesla_notifier.scheduler import Scheduler
 from tesla_notifier.state import push_state
+from tesla_notifier.traffic import TrafficSampler
 from tesla_notifier.weather import generate_weather_suggestion, get_weather
 
 logger = setup_logger("main")
@@ -23,6 +24,7 @@ logger = setup_logger("main")
 # 全局状态
 mqtt_handler: MqttHandler | None = None
 scheduler: Scheduler | None = None
+traffic_sampler: TrafficSampler | None = None
 _shutdown_event: asyncio.Event | None = None
 
 
@@ -86,8 +88,18 @@ async def handle_trip_end() -> None:
                 else 0
             )  # Wh/km
 
+            trip_traffic_summary = (
+                None
+            )
+            if traffic_sampler is not None:
+                await traffic_sampler.wait_for_stop_finalize()
+                trip_traffic_summary = await traffic_sampler.consume_finished_summary()
+
             # 获取驾驶评分
-            score = await database.get_trip_driving_score(trip.id)
+            score = await database.get_trip_driving_score(
+                trip.id,
+                traffic_summary=trip_traffic_summary,
+            )
 
             success = await bark.send_trip_end(
                 start_address=trip.start_address,
@@ -105,7 +117,14 @@ async def handle_trip_end() -> None:
                 outside_temp=trip.outside_temp_avg,
                 hard_accel_count=score.hard_accel_count if score else None,
                 hard_brake_count=score.hard_brake_count if score else None,
-                driving_grade=score.grade if score else None,
+                driving_score=score.score if score else None,
+                driving_label=score.label if score else None,
+                road_context=score.road_context if score else None,
+                analysis_summary=score.analysis_summary if score else None,
+                analysis_advice=score.advice if score else None,
+                traffic_label=score.traffic_label if score else None,
+                traffic_summary=score.traffic_summary if score else None,
+                traffic_sample_count=score.traffic_sample_count if score else None,
                 speed_avg=trip.speed_avg,
                 speed_max=trip.speed_max,
                 odometer=trip.odometer,
@@ -126,6 +145,33 @@ async def handle_trip_end() -> None:
                 await asyncio.sleep(retry_delay)
             else:
                 logger.error("处理行程结束失败，已达最大重试次数")
+
+
+async def handle_trip_started() -> None:
+    """处理行程开始，启动路况采样。"""
+    if traffic_sampler is None:
+        return
+
+    await traffic_sampler.start_trip()
+
+
+async def handle_trip_stopped() -> None:
+    """处理行程结束边缘事件，先冻结路况采样结果。"""
+    if traffic_sampler is None:
+        return
+
+    await traffic_sampler.stop_trip()
+
+
+async def handle_position_update(
+    latitude: float | None,
+    longitude: float | None,
+) -> None:
+    """同步 MQTT 最新坐标到路况采样器。"""
+    if traffic_sampler is None:
+        return
+
+    await traffic_sampler.update_position(latitude, longitude)
 
 
 async def handle_charging_complete() -> None:
@@ -500,7 +546,7 @@ async def handle_charging_issue_alert() -> None:
 
 async def run() -> None:
     """运行服务"""
-    global mqtt_handler, scheduler
+    global mqtt_handler, scheduler, traffic_sampler
 
     logger.info("========== Tesla Notifier 启动 ==========")
 
@@ -525,6 +571,19 @@ async def run() -> None:
     logger.info(f"  CAIYUN_TOKEN: {'(已配置)' if config.caiyun_token else '(未配置)'}")
     logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
+    traffic_status = (
+        "(已开启)"
+        if config.traffic_analysis_enabled and config.amap_key
+        else "(已关闭)"
+    )
+    logger.debug(f"  TRAFFIC_ANALYSIS_ENABLED: 行程路况采样{traffic_status}")
+    if config.traffic_analysis_enabled:
+        logger.debug(f"  TRAFFIC_SAMPLE_INTERVAL: {config.traffic_sample_interval}s")
+        logger.debug(
+            "  TRAFFIC_SAMPLE_MIN_DISTANCE_KM: "
+            f"{config.traffic_sample_min_distance_km} km"
+        )
+        logger.debug(f"  TRAFFIC_QUERY_RADIUS: {config.traffic_query_radius} m")
     sentry_status = "(已开启)" if config.sentry_notify_enabled else "(已关闭)"
     logger.debug(f"  SENTRY_NOTIFY_ENABLED: 哨兵录制{sentry_status}")
     if config.sentry_notify_enabled:
@@ -561,8 +620,11 @@ async def run() -> None:
     # 启动 MQTT
     if config.mqtt_enabled:
         logger.info("启动 MQTT 订阅...")
+        traffic_sampler = TrafficSampler()
         mqtt_handler = MqttHandler(
             car_id=config.car_id,
+            on_trip_started=handle_trip_started,
+            on_trip_stopped=handle_trip_stopped,
             on_trip_end=handle_trip_end,
             on_charging_complete=handle_charging_complete,
             on_sentry_activated=handle_sentry_activated,
@@ -571,6 +633,7 @@ async def run() -> None:
             on_departure_safety_alert=handle_departure_safety_alert,
             on_tire_pressure_alert=handle_tire_pressure_alert,
             on_charging_issue_alert=handle_charging_issue_alert,
+            on_position_update=handle_position_update,
         )
         mqtt_handler.set_event_loop(loop)
         mqtt_handler.connect()
@@ -607,7 +670,7 @@ async def run() -> None:
 
 async def cleanup() -> None:
     """清理所有资源（统一的清理函数）"""
-    global mqtt_handler, scheduler
+    global mqtt_handler, scheduler, traffic_sampler
 
     logger.info("========== 正在停止服务 ==========")
 
@@ -624,6 +687,13 @@ async def cleanup() -> None:
             mqtt_handler.disconnect()
         except Exception as e:
             logger.error(f"断开 MQTT 连接失败: {e}")
+
+    # 停止路况采样
+    if traffic_sampler:
+        try:
+            await traffic_sampler.shutdown()
+        except Exception as e:
+            logger.error(f"停止路况采样失败: {e}")
 
     # 关闭数据库连接池
     try:

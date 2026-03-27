@@ -48,6 +48,21 @@ class Config:
 
     # 高德地图
     amap_key: str = field(default_factory=lambda: os.getenv("AMAP_KEY", ""))
+    traffic_analysis_enabled: bool = field(
+        default_factory=lambda: os.getenv("TRAFFIC_ANALYSIS_ENABLED", "").upper()
+        == "ON"
+    )
+    traffic_sample_interval: int = field(
+        default_factory=lambda: int(os.getenv("TRAFFIC_SAMPLE_INTERVAL", "300"))
+    )
+    traffic_sample_min_distance_km: float = field(
+        default_factory=lambda: float(
+            os.getenv("TRAFFIC_SAMPLE_MIN_DISTANCE_KM", "3")
+        )
+    )
+    traffic_query_radius: int = field(
+        default_factory=lambda: int(os.getenv("TRAFFIC_QUERY_RADIUS", "1000"))
+    )
 
     # 车辆
     car_id: str = field(default_factory=lambda: os.getenv("CAR_ID", "1"))
