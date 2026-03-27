@@ -19,7 +19,7 @@ TeslaMate 车辆状态推送插件 - 行程结束、充电完成、哨兵事件�
 
 - **行程结束推送** - 行程结束后自动推送详情（起终点、里程、能耗、效率、驾驶评分）
 - **充电完成推送** - 充电完成后推送充电详情（充入电量、峰值功率、费用）
-- **哨兵模式推送** - 哨兵模式激活/关闭/事件触发时推送
+- **哨兵模式推送** - 哨兵模式激活/关闭消耗电量推送
 
 ### 定时报告（Cron 驱动）
 
@@ -55,7 +55,7 @@ services:
   # ... 其他 TeslaMate 服务 ...
 
   tesla-notifier:
-    image: ghcr.io/mokoyee/tesla-notifier:latest
+    image: mokoyee/tesla-notifier:latest
     container_name: tesla-notifier
     restart: unless-stopped
     environment:

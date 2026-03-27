@@ -55,7 +55,7 @@ services:
   # ... other TeslaMate services ...
 
   tesla-notifier:
-    image: ghcr.io/mokoyee/tesla-notifier:latest
+    image: mokoyee/tesla-notifier:latest
     container_name: tesla-notifier
     restart: unless-stopped
     environment:

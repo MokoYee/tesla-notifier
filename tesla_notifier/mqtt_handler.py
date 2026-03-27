@@ -121,12 +121,16 @@ class MqttHandler:
         topic = msg.topic
         payload = msg.payload.decode("utf-8")
 
+        # 提取主题名称
+        topic_name = topic.split("/")[-1]
+        logger.debug(f"MQTT 收到: {topic_name} = {payload}")
+
         # 行程结束检测
         if "/state" in topic:
             prev_state = self.vehicle_state.state
             self.vehicle_state.state = payload
 
-            logger.debug(f"state 变化: {prev_state} -> {payload}")
+            logger.info(f"state 变化: {prev_state} -> {payload}")
 
             if prev_state == "driving" and payload in ("online", "asleep"):
                 logger.info(f"检测到行程结束: {prev_state} -> {payload}")
@@ -146,7 +150,10 @@ class MqttHandler:
             prev_state = self.vehicle_state.charging_state
             self.vehicle_state.charging_state = payload
 
-            if prev_state == "Charging" and payload in ("Complete", "Stopped"):
+            # 记录所有充电状态变化
+            logger.info(f"charging_state 变化: {prev_state} -> {payload}")
+
+            if prev_state == "Charging" and payload in ("Complete", "Stopped", "Disconnected"):
                 logger.info(f"检测到充电结束: {prev_state} -> {payload}")
                 if self.on_charging_complete and self._loop:
                     logger.info("将在 10 秒后触发充电完成处理")
