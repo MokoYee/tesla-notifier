@@ -8,7 +8,7 @@
   <a href="https://github.com/MokoYee/tesla-notifier/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/MokoYee/tesla-notifier/build.yml?style=flat-square&label=CI" alt="CI"></a>
 </p>
 
-A TeslaMate push notification plugin - Get real-time notifications for trip completion, charging status, and sentry events on your iPhone.
+TeslaMate notification companion focused on pushes instead of a heavy backend: get trip, charging, sentry, and safety alerts on your iPhone in real time.
 
 ## 📸 Notification Examples
 
@@ -18,18 +18,19 @@ A TeslaMate push notification plugin - Get real-time notifications for trip comp
 
 ### Real-time Notifications (MQTT-driven)
 
-- **Trip Summary** - Automatic push after each trip (origin/destination, distance, energy consumption, efficiency, driving score)
+- **Trip Summary** - Automatic push after each trip (origin/destination, distance, energy consumption, 100-point driving score, traffic-aware analysis)
 - **Charging Complete** - Push notification when charging finishes (energy added, peak power, cost)
-- **Sentry Mode** - Notifications when sentry mode activates/deactivates or events are triggered
+- **Sentry Mode** - Notifications when sentry mode activates/deactivates, plus realtime recording event alerts
 - **Departure Safety Alert** - Detects unlocked car, open windows/doors, open trunks, or an open charge port after leaving the vehicle
 - **Tire Pressure Alert** - Realtime tire pressure warning based on TeslaMate `tpms_soft_warning_*`
 - **Charging Issue Alert** - Detects `NoPower` or charging stopped early before reaching the target SoC
+- **Traffic-aware Trip Analysis** - Optional Amap traffic sampling during a drive, merged into trip scoring and narrative analysis
 
 ### Scheduled Reports (Cron-driven)
 
-- **Daily Briefing** - Morning push with weather forecast + yesterday's driving summary + driving score
+- **Daily Briefing** - Morning push with weather forecast + yesterday's driving summary
 - **Weekly Report** - Every Monday with weekly driving statistics
-- **Monthly Report** - On the 1st of each month with last month's statistics + driving score
+- **Monthly Report** - On the 1st of each month with last month's statistics
 
 ## Quick Start
 
@@ -41,7 +42,7 @@ A TeslaMate push notification plugin - Get real-time notifications for trip comp
 curl -O https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/docker-compose.yml
 ```
 
-2. Edit `docker-compose.yml` and configure `BARK_KEY` and other required settings (see comments in file)
+2. Edit `docker-compose.yml` and configure `BARK_KEY`; add `AMAP_KEY` only if you want better addresses and traffic-aware trip analysis
 
 3. Start the service:
 
@@ -86,6 +87,7 @@ See [docs/environment.md](docs/environment.md) for the full environment variable
 **Optional:**
 - `CAIYUN_TOKEN` - Caiyun Weather token for detailed weather info (China)
 - `AMAP_KEY` - Amap (Gaode) key for accurate Chinese addresses
+- `TRAFFIC_ANALYSIS_ENABLED` - Enable low-frequency traffic sampling during trips
 - `DEPARTURE_SAFETY_NOTIFY_ENABLED` - Enable departure safety alerts
 - `TPMS_NOTIFY_ENABLED` - Enable tire pressure alerts
 - `CHARGING_ISSUE_NOTIFY_ENABLED` - Enable charging issue alerts
@@ -97,9 +99,12 @@ See [docs/environment.md](docs/environment.md) for the full environment variable
   - [API Docs](https://docs.caiyunapp.com/weather-api/v2/v2.6/1-realtime.html)
 - **Open-Meteo** (Fallback) - Free, no configuration needed, auto-fallback when Caiyun fails
 
-## Amap Geocoding Service
+## Amap Services
 
-Configure `AMAP_KEY` to enable reverse geocoding, converting GPS coordinates to accurate Chinese addresses.
+Configure `AMAP_KEY` to enable:
+
+- Reverse geocoding for better Chinese addresses
+- Traffic-aware trip analysis by sampling Amap traffic status during a drive
 
 **Setup:**
 
@@ -108,12 +113,11 @@ Configure `AMAP_KEY` to enable reverse geocoding, converting GPS coordinates to 
 3. Add Key, select "Web Service" as platform
 4. Set the key to `AMAP_KEY` environment variable
 
-**API Quota:**
-- Personal developers: 5,000 free calls per day
-- Enterprise verification increases quota
-
 **Reference:**
 - [Reverse Geocoding API](https://lbs.amap.com/api/webservice/guide/api/georegeo)
+- [Traffic Status API](https://lbs.amap.com/api/webservice/guide/api-advanced/traffic-situation-inquiry)
+
+> Note: reverse geocoding is a normal Web Service capability, while traffic status is documented by Amap as an advanced service. If your key has no access, Tesla Notifier will automatically fall back to trip pushes without traffic enhancement.
 
 ## Architecture
 
@@ -131,6 +135,7 @@ Tesla API → TeslaMate → PostgreSQL
 - `TeslaMate` is referenced only for compatibility purposes. All related names and marks remain the property of their respective owners.
 - By default, this project only reads data exposed by TeslaMate through MQTT / PostgreSQL and does not redistribute TeslaMate source code.
 - If you modify, distribute, or provide a modified TeslaMate instance over a network, you are responsible for complying with TeslaMate's upstream `AGPL-3.0` license and trademark policy.
+- This project currently stays on `GPL-3.0`. Switching it straight to `MIT` is not recommended before you fully verify copyright ownership and confirm there is no GPL/AGPL-derived code in the tree.
 - The actual deployer is responsible for assessing and bearing any compliance, trademark, licensing, or operational risks arising from their usage model.
 
 ## License

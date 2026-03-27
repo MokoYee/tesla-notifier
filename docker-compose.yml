@@ -1,6 +1,8 @@
 services:
   tesla-notifier:
     image: mokoyee/tesla-notifier:latest
+    # 发布锁版本时可改为具体 tag，例如：
+    # image: mokoyee/tesla-notifier:v1.1.0
     container_name: tesla-notifier
     restart: unless-stopped
     volumes:
@@ -28,6 +30,16 @@ services:
       # Bark 推送配置
       - BARK_URL=https://api.day.app
       - BARK_KEY=your_bark_key
+
+      # 第三方服务（可选）
+      # - CAIYUN_TOKEN=your_caiyun_token
+      # - AMAP_KEY=your_amap_key
+
+      # 行程路况分析（可选，依赖高德交通态势高级接口）
+      # - TRAFFIC_ANALYSIS_ENABLED=ON
+      # - TRAFFIC_SAMPLE_INTERVAL=300
+      # - TRAFFIC_SAMPLE_MIN_DISTANCE_KM=3
+      # - TRAFFIC_QUERY_RADIUS=1000
 
       # 哨兵录制提醒（可选）
       # - SENTRY_NOTIFY_ENABLED=ON

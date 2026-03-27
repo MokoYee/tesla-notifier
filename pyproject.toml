@@ -1,6 +1,6 @@
 [project]
 name = "tesla-notifier"
-version = "1.0.0"
+version = "1.1.0"
 description = "TeslaMate 推送通知服务 - 支持行程结束、充电完成、周报月报等推送"
 readme = "README.md"
 requires-python = ">=3.11"
