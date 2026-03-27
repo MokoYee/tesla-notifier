@@ -78,7 +78,7 @@ docker-compose pull && docker-compose up -d
 
 ## Configuration
 
-See [docker-compose.yml](docker-compose.yml) for all configuration options with comments.
+See [docs/environment.md](docs/environment.md) for the full environment variable reference, and use [`.env.example`](.env.example) or [docker-compose.yml](docker-compose.yml) as deployment templates.
 
 **Required:**
 - `BARK_KEY` - Bark push notification key

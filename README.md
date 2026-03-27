@@ -78,7 +78,7 @@ docker-compose pull && docker-compose up -d
 
 ## 配置说明
 
-完整配置项请参考 [docker-compose.yml](docker-compose.yml) 文件内的注释。
+完整环境变量说明请参考 [docs/environment.md](docs/environment.md)，部署模板请参考 [`.env.example`](.env.example) 和 [docker-compose.yml](docker-compose.yml)。
 
 **必填配置：**
 - `BARK_KEY` - Bark 推送密钥
