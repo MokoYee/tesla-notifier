@@ -119,6 +119,14 @@ Tesla API → TeslaMate → PostgreSQL
           Tesla Notifier → Bark → iPhone
 ```
 
+## Disclaimer and Third-Party Notice
+
+- This project is an unofficial community tool and is not affiliated with, endorsed by, sponsored by, or supported by the official TeslaMate project.
+- `TeslaMate` is referenced only for compatibility purposes. All related names and marks remain the property of their respective owners.
+- By default, this project only reads data exposed by TeslaMate through MQTT / PostgreSQL and does not redistribute TeslaMate source code.
+- If you modify, distribute, or provide a modified TeslaMate instance over a network, you are responsible for complying with TeslaMate's upstream `AGPL-3.0` license and trademark policy.
+- The actual deployer is responsible for assessing and bearing any compliance, trademark, licensing, or operational risks arising from their usage model.
+
 ## License
 
 GPL-3.0
