@@ -403,6 +403,101 @@ async def handle_sentry_recording() -> None:
         logger.exception(f"处理哨兵录制异常: {e}")
 
 
+async def handle_departure_safety_alert() -> None:
+    """处理离车安全提醒"""
+    logger.info("========== 检测到离车安全风险 ==========")
+
+    if not mqtt_handler:
+        return
+
+    try:
+        issues = mqtt_handler.get_departure_safety_issues()
+        if not issues:
+            logger.info("离车安全检查已恢复正常，跳过提醒")
+            return
+
+        location = await mqtt_handler.get_location_str()
+        battery_level = mqtt_handler.vehicle_state.battery_level
+
+        success = await bark.send_departure_safety_alert(
+            issues=issues,
+            location=location,
+            battery_level=battery_level,
+        )
+
+        if success:
+            logger.info("离车安全提醒推送成功")
+        else:
+            logger.error("离车安全提醒推送失败")
+
+    except Exception as e:
+        logger.exception(f"处理离车安全提醒异常: {e}")
+
+
+async def handle_tire_pressure_alert() -> None:
+    """处理胎压异常提醒"""
+    logger.info("========== 检测到胎压异常 ==========")
+
+    if not mqtt_handler:
+        return
+
+    try:
+        warning_wheels, pressures = mqtt_handler.get_tire_pressure_snapshot()
+        if not warning_wheels:
+            logger.info("当前无胎压告警，跳过提醒")
+            return
+
+        location = await mqtt_handler.get_location_str()
+
+        success = await bark.send_tire_pressure_alert(
+            warning_wheels=warning_wheels,
+            pressures=pressures,
+            location=location,
+        )
+
+        if success:
+            logger.info("胎压异常推送成功")
+        else:
+            logger.error("胎压异常推送失败")
+
+    except Exception as e:
+        logger.exception(f"处理胎压异常提醒异常: {e}")
+
+
+async def handle_charging_issue_alert() -> None:
+    """处理充电异常提醒"""
+    logger.info("========== 检测到充电异常 ==========")
+
+    if not mqtt_handler:
+        return
+
+    try:
+        issue_type = mqtt_handler.get_current_charging_issue()
+        if not issue_type:
+            logger.info("当前无充电异常，跳过提醒")
+            return
+
+        location = await mqtt_handler.get_location_str()
+        state = mqtt_handler.vehicle_state
+
+        success = await bark.send_charging_issue_alert(
+            issue_type=issue_type,
+            location=location,
+            battery_level=state.battery_level,
+            charge_limit_soc=state.charge_limit_soc,
+            charger_power=state.charger_power,
+            plugged_in=state.plugged_in,
+        )
+
+        if success:
+            logger.info("充电异常推送成功")
+        else:
+            logger.error("充电异常推送失败")
+
+    except Exception as e:
+        logger.exception(f"处理充电异常提醒异常: {e}")
+
+
 async def run() -> None:
     """运行服务"""
     global mqtt_handler, scheduler
@@ -437,6 +532,26 @@ async def run() -> None:
             "  SENTRY_RECORDING_COOLDOWN: "
             f"防抖间隔{config.sentry_recording_cooldown}s"
         )
+    departure_status = "(已开启)" if config.departure_safety_notify_enabled else "(已关闭)"
+    logger.debug(f"  DEPARTURE_SAFETY_NOTIFY_ENABLED: 离车安全{departure_status}")
+    if config.departure_safety_notify_enabled:
+        logger.debug(f"  DEPARTURE_SAFETY_DELAY: {config.departure_safety_delay}s")
+    tpms_status = "(已开启)" if config.tpms_notify_enabled else "(已关闭)"
+    logger.debug(f"  TPMS_NOTIFY_ENABLED: 胎压异常{tpms_status}")
+    if config.tpms_notify_enabled:
+        logger.debug(f"  TPMS_NOTIFY_COOLDOWN: {config.tpms_notify_cooldown}s")
+    charging_issue_status = (
+        "(已开启)" if config.charging_issue_notify_enabled else "(已关闭)"
+    )
+    logger.debug(f"  CHARGING_ISSUE_NOTIFY_ENABLED: 充电异常{charging_issue_status}")
+    if config.charging_issue_notify_enabled:
+        logger.debug(
+            f"  CHARGING_ISSUE_COOLDOWN: {config.charging_issue_cooldown}s"
+        )
+        logger.debug(
+            "  CHARGING_STOPPED_MIN_SOC_GAP: "
+            f"{config.charging_stopped_min_soc_gap}%"
+        )
 
     # 初始化数据库连接池
     await database.init_pool()
@@ -453,6 +568,9 @@ async def run() -> None:
             on_sentry_activated=handle_sentry_activated,
             on_sentry_deactivated=handle_sentry_deactivated,
             on_sentry_recording=handle_sentry_recording,
+            on_departure_safety_alert=handle_departure_safety_alert,
+            on_tire_pressure_alert=handle_tire_pressure_alert,
+            on_charging_issue_alert=handle_charging_issue_alert,
         )
         mqtt_handler.set_event_loop(loop)
         mqtt_handler.connect()

@@ -20,6 +20,9 @@ TeslaMate 车辆状态推送插件 - 行程结束、充电完成、哨兵事件�
 - **行程结束推送** - 行程结束后自动推送详情（起终点、里程、能耗、效率、驾驶评分）
 - **充电完成推送** - 充电完成后推送充电详情（充入电量、峰值功率、费用）
 - **哨兵模式推送** - 哨兵模式激活/关闭消耗电量推送
+- **离车安全提醒** - 离车后检测未锁车、门窗未关、前后备箱未关、充电口未关
+- **胎压异常提醒** - 基于 TeslaMate `tpms_soft_warning_*` 实时推送异常轮位和胎压
+- **充电异常提醒** - 检测 `NoPower` 或充电提前停止且未达到目标电量的情况
 
 ### 定时报告（Cron 驱动）
 
@@ -83,6 +86,9 @@ docker-compose pull && docker-compose up -d
 **可选配置：**
 - `CAIYUN_TOKEN` - 彩云天气 Token，提供更详细的天气信息
 - `AMAP_KEY` - 高德地图 Key，提供更精确的中文地址
+- `DEPARTURE_SAFETY_NOTIFY_ENABLED` - 开启离车安全提醒
+- `TPMS_NOTIFY_ENABLED` - 开启胎压异常提醒
+- `CHARGING_ISSUE_NOTIFY_ENABLED` - 开启充电异常提醒
 
 ## 天气服务
 

@@ -479,6 +479,7 @@ async def send_sentry_activated(
         )
     )
 
+
 async def send_sentry_deactivated(
     location: str | None = None,
     duration_min: float | None = None,
@@ -580,6 +581,169 @@ async def send_sentry_recording(
             group="tesla-sentry",
             level="timeSensitive",
             sound="minuet",  # 使用不同的提示音区分普通通知
+            icon=config.bark_icon,
+            badge=1,
+        )
+    )
+
+
+async def send_departure_safety_alert(
+    issues: list[str],
+    location: str | None = None,
+    battery_level: int | None = None,
+) -> bool:
+    """发送离车安全提醒"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(config.timezone)
+    now = datetime.now(tz).strftime("%H:%M")
+
+    lines = [
+        "━━━━━━━━━━━━━━━━",
+        f"🕐 {now}",
+    ]
+
+    if location:
+        lines.append(f"📍 {location}")
+
+    if battery_level is not None:
+        lines.append(f"🔋 电量: {battery_level}%")
+
+    lines.extend([
+        "",
+        "检测到离车后仍存在以下风险：",
+    ])
+
+    for issue in issues:
+        lines.append(f"• {issue}")
+
+    lines.extend([
+        "",
+        "请及时确认车辆状态",
+        "━━━━━━━━━━━━━━━━",
+    ])
+
+    return await send_notification(
+        BarkOptions(
+            title="🚨 离车安全提醒",
+            body="\n".join(lines),
+            group="tesla-safety",
+            level="timeSensitive",
+            icon=config.bark_icon,
+            badge=1,
+        )
+    )
+
+
+async def send_tire_pressure_alert(
+    warning_wheels: list[str],
+    pressures: dict[str, float | None],
+    location: str | None = None,
+) -> bool:
+    """发送胎压异常提醒"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(config.timezone)
+    now = datetime.now(tz).strftime("%H:%M")
+
+    lines = [
+        "━━━━━━━━━━━━━━━━",
+        f"🕐 {now}",
+    ]
+
+    if location:
+        lines.append(f"📍 {location}")
+
+    lines.extend([
+        "",
+        f"检测到胎压异常: {'、'.join(warning_wheels)}",
+        "",
+        "当前胎压：",
+    ])
+
+    for wheel, pressure in pressures.items():
+        suffix = " ⚠️" if wheel in warning_wheels else ""
+        if pressure is None:
+            lines.append(f"• {wheel}: 无数据{suffix}")
+        else:
+            lines.append(f"• {wheel}: {pressure:.1f} bar{suffix}")
+
+    lines.extend([
+        "",
+        "建议尽快检查轮胎状态",
+        "━━━━━━━━━━━━━━━━",
+    ])
+
+    return await send_notification(
+        BarkOptions(
+            title="🛞 胎压异常",
+            body="\n".join(lines),
+            group="tesla-tpms",
+            level="timeSensitive",
+            icon=config.bark_icon,
+            badge=1,
+        )
+    )
+
+
+async def send_charging_issue_alert(
+    issue_type: str,
+    location: str | None = None,
+    battery_level: int | None = None,
+    charge_limit_soc: int | None = None,
+    charger_power: float | None = None,
+    plugged_in: bool | None = None,
+) -> bool:
+    """发送充电异常提醒"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(config.timezone)
+    now = datetime.now(tz).strftime("%H:%M")
+
+    if issue_type == "no_power":
+        title = "⚡ 充电电源异常"
+        summary = "车辆已连接，但当前未获取到供电"
+    else:
+        title = "⚠️ 充电意外停止"
+        summary = "当前电量未达到设定上限，充电提前结束"
+
+    lines = [
+        "━━━━━━━━━━━━━━━━",
+        f"🕐 {now}",
+    ]
+
+    if location:
+        lines.append(f"📍 {location}")
+
+    if battery_level is not None:
+        lines.append(f"🔋 当前电量: {battery_level}%")
+
+    if charge_limit_soc is not None:
+        lines.append(f"🎯 充电上限: {charge_limit_soc}%")
+
+    if charger_power is not None:
+        lines.append(f"🔌 当前功率: {charger_power:.1f} kW")
+
+    if plugged_in is not None:
+        plugged_in_text = "已连接" if plugged_in else "未连接"
+        lines.append(f"🔗 充电连接: {plugged_in_text}")
+
+    lines.extend([
+        "",
+        summary,
+        "建议检查电源、充电桩或车辆状态",
+        "━━━━━━━━━━━━━━━━",
+    ])
+
+    return await send_notification(
+        BarkOptions(
+            title=title,
+            body="\n".join(lines),
+            group="tesla-charging",
+            level="timeSensitive",
             icon=config.bark_icon,
             badge=1,
         )

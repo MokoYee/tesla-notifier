@@ -21,6 +21,9 @@ A TeslaMate push notification plugin - Get real-time notifications for trip comp
 - **Trip Summary** - Automatic push after each trip (origin/destination, distance, energy consumption, efficiency, driving score)
 - **Charging Complete** - Push notification when charging finishes (energy added, peak power, cost)
 - **Sentry Mode** - Notifications when sentry mode activates/deactivates or events are triggered
+- **Departure Safety Alert** - Detects unlocked car, open windows/doors, open trunks, or an open charge port after leaving the vehicle
+- **Tire Pressure Alert** - Realtime tire pressure warning based on TeslaMate `tpms_soft_warning_*`
+- **Charging Issue Alert** - Detects `NoPower` or charging stopped early before reaching the target SoC
 
 ### Scheduled Reports (Cron-driven)
 
@@ -83,6 +86,9 @@ See [docker-compose.yml](docker-compose.yml) for all configuration options with 
 **Optional:**
 - `CAIYUN_TOKEN` - Caiyun Weather token for detailed weather info (China)
 - `AMAP_KEY` - Amap (Gaode) key for accurate Chinese addresses
+- `DEPARTURE_SAFETY_NOTIFY_ENABLED` - Enable departure safety alerts
+- `TPMS_NOTIFY_ENABLED` - Enable tire pressure alerts
+- `CHARGING_ISSUE_NOTIFY_ENABLED` - Enable charging issue alerts
 
 ## Weather Services
 

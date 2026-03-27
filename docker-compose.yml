@@ -28,6 +28,24 @@ services:
       # Bark 推送配置
       - BARK_URL=https://api.day.app
       - BARK_KEY=your_bark_key
+
+      # 哨兵录制提醒（可选）
+      # - SENTRY_NOTIFY_ENABLED=ON
+      # - SENTRY_RECORDING_COOLDOWN=300
+
+      # 离车安全提醒（可选）
+      # - DEPARTURE_SAFETY_NOTIFY_ENABLED=ON
+      # - DEPARTURE_SAFETY_DELAY=45
+
+      # 胎压异常提醒（可选）
+      # - TPMS_NOTIFY_ENABLED=ON
+      # - TPMS_NOTIFY_COOLDOWN=1800
+
+      # 充电异常提醒（可选）
+      # - CHARGING_ISSUE_NOTIFY_ENABLED=ON
+      # - CHARGING_ISSUE_COOLDOWN=900
+      # - CHARGING_STOPPED_MIN_SOC_GAP=3
+
       # 车辆配置
       - CAR_ID=1
       - MIN_TRIP_DISTANCE=1

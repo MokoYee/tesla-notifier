@@ -66,6 +66,39 @@ class Config:
         default_factory=lambda: int(os.getenv("SENTRY_RECORDING_COOLDOWN", "300"))
     )
 
+    # 离车安全提醒
+    departure_safety_notify_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "DEPARTURE_SAFETY_NOTIFY_ENABLED", ""
+        ).upper()
+        == "ON"
+    )
+    departure_safety_delay: int = field(
+        default_factory=lambda: int(os.getenv("DEPARTURE_SAFETY_DELAY", "45"))
+    )
+
+    # 胎压提醒
+    tpms_notify_enabled: bool = field(
+        default_factory=lambda: os.getenv("TPMS_NOTIFY_ENABLED", "").upper() == "ON"
+    )
+    tpms_notify_cooldown: int = field(
+        default_factory=lambda: int(os.getenv("TPMS_NOTIFY_COOLDOWN", "1800"))
+    )
+
+    # 充电异常提醒
+    charging_issue_notify_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "CHARGING_ISSUE_NOTIFY_ENABLED", ""
+        ).upper()
+        == "ON"
+    )
+    charging_issue_cooldown: int = field(
+        default_factory=lambda: int(os.getenv("CHARGING_ISSUE_COOLDOWN", "900"))
+    )
+    charging_stopped_min_soc_gap: int = field(
+        default_factory=lambda: int(os.getenv("CHARGING_STOPPED_MIN_SOC_GAP", "3"))
+    )
+
     # 日志级别（DEBUG/INFO/WARNING/ERROR）
     log_level: str = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").upper()
