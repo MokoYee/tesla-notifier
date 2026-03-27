@@ -1,9 +1,10 @@
 """MQTT 订阅模块"""
 
 import asyncio
-from collections import deque
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any
 
 import paho.mqtt.client as mqtt
 
@@ -12,24 +13,30 @@ from tesla_notifier.logger import setup_logger
 
 logger = setup_logger("mqtt")
 
+SENTRY_RECORDING_DISPLAY_STATE = 7
+AsyncCallback = Callable[[], Coroutine[Any, Any, None]]
+AsyncSentryDeactivatedCallback = Callable[
+    [float | None, int | None, int],
+    Coroutine[Any, Any, None],
+]
+
 
 @dataclass
 class VehicleState:
     """车辆状态缓存"""
 
     state: str | None = None
-    shift_state: str | None = None
     latitude: float | None = None
     longitude: float | None = None
     battery_level: int | None = None
-    rated_range: float | None = None
-    plugged_in: bool = False
     charging_state: str | None = None
     sentry_mode: bool = False
     sentry_activated_at: datetime | None = None
-    battery_history: deque = field(default_factory=lambda: deque(maxlen=20))
+    sentry_activated_battery_level: int | None = None
+    sentry_recording_count: int = 0
+    center_display_state: int | None = None
+    center_display_state_initialized: bool = False
     last_sentry_event_time: datetime | None = None
-    power: float = 0.0
 
 
 @dataclass
@@ -37,18 +44,15 @@ class MqttHandler:
     """MQTT 消息处理器"""
 
     car_id: str
-    on_trip_end: asyncio.coroutines = None  # type: ignore[type-arg]
-    on_charging_complete: asyncio.coroutines = None  # type: ignore[type-arg]
-    on_sentry_activated: asyncio.coroutines = None  # type: ignore[type-arg]
-    on_sentry_deactivated: asyncio.coroutines = None  # type: ignore[type-arg]
-    on_sentry_recording: asyncio.coroutines = None  # type: ignore[type-arg]
+    on_trip_end: AsyncCallback | None = None
+    on_charging_complete: AsyncCallback | None = None
+    on_sentry_activated: AsyncCallback | None = None
+    on_sentry_deactivated: AsyncSentryDeactivatedCallback | None = None
+    on_sentry_recording: AsyncCallback | None = None
 
     client: mqtt.Client | None = None
     vehicle_state: VehicleState = field(default_factory=VehicleState)
-    pushed_trips: set[int] = field(default_factory=set)
-    pushed_charges: set[int] = field(default_factory=set)
     _loop: asyncio.AbstractEventLoop | None = None
-    _battery_monitor_task: asyncio.Task | None = None
 
     def connect(self) -> None:
         """连接 MQTT 服务器"""
@@ -57,10 +61,14 @@ class MqttHandler:
 
         logger.info(f"正在连接 MQTT 服务器: {config.mqtt_url}")
 
-        self.client = mqtt.Client(
-            client_id=f"tesla-notifier-{config.car_id}",
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-        )
+        callback_api_version = getattr(mqtt, "CallbackAPIVersion", None)
+        if callback_api_version is not None:
+            self.client = mqtt.Client(
+                client_id=f"tesla-notifier-{config.car_id}",
+                callback_api_version=callback_api_version.VERSION2,
+            )
+        else:
+            self.client = mqtt.Client(client_id=f"tesla-notifier-{config.car_id}")
 
         if config.mqtt_username and config.mqtt_password:
             self.client.username_pw_set(config.mqtt_username, config.mqtt_password)
@@ -90,9 +98,9 @@ class MqttHandler:
         self,
         client: mqtt.Client,
         userdata: object,
-        flags: mqtt.ConnectFlags,
-        reason_code: mqtt.ReasonCode,
-        properties: mqtt.Properties | None,
+        flags: Any,
+        reason_code: Any,
+        properties: Any | None,
     ) -> None:
         """连接成功回调"""
         if reason_code == 0:
@@ -107,9 +115,9 @@ class MqttHandler:
         self,
         client: mqtt.Client,
         userdata: object,
-        disconnect_flags: mqtt.DisconnectFlags,
-        reason_code: mqtt.ReasonCode,
-        properties: mqtt.Properties | None,
+        disconnect_flags: Any,
+        reason_code: Any,
+        properties: Any | None,
     ) -> None:
         """断开连接回调"""
         logger.warning(f"MQTT 连接断开: {reason_code}")
@@ -140,11 +148,6 @@ class MqttHandler:
                         self._delayed_trip_end(), self._loop
                     )
 
-        if "/shift_state" in topic:
-            prev_state = self.vehicle_state.shift_state
-            self.vehicle_state.shift_state = payload
-            logger.debug(f"shift_state 变化: {prev_state} -> {payload}")
-
         # 充电状态检测
         if "/charging_state" in topic:
             prev_state = self.vehicle_state.charging_state
@@ -153,7 +156,11 @@ class MqttHandler:
             # 记录所有充电状态变化
             logger.info(f"charging_state 变化: {prev_state} -> {payload}")
 
-            if prev_state == "Charging" and payload in ("Complete", "Stopped", "Disconnected"):
+            if prev_state == "Charging" and payload in (
+                "Complete",
+                "Stopped",
+                "Disconnected",
+            ):
                 logger.info(f"检测到充电结束: {prev_state} -> {payload}")
                 if self.on_charging_complete and self._loop:
                     logger.info("将在 10 秒后触发充电完成处理")
@@ -169,41 +176,41 @@ class MqttHandler:
 
             if not prev_sentry and current_sentry:
                 logger.info("========== 哨兵模式已激活 ==========")
-                logger.info(
-                    f"哨兵录制检测: {'已启用' if config.sentry_notify_enabled else '已禁用'}, "
-                    f"电池下降阈值: {config.sentry_battery_drop_threshold:.3f}%/min, "
-                    f"防抖间隔: {config.sentry_recording_cooldown}s"
-                )
                 self.vehicle_state.sentry_activated_at = datetime.now()
-
-                if config.sentry_notify_enabled and self._loop and not self._battery_monitor_task:
-                    logger.info("启动电池下降速率监控任务...")
-                    self._battery_monitor_task = self._loop.create_task(self.start_battery_monitor())
+                self.vehicle_state.sentry_activated_battery_level = (
+                    self.vehicle_state.battery_level
+                )
+                self.vehicle_state.sentry_recording_count = 0
+                self.vehicle_state.last_sentry_event_time = None
 
                 if self.on_sentry_activated and self._loop:
-                    self._loop.call_soon(
-                        lambda: asyncio.create_task(self.on_sentry_activated()),
-                    )
+                    self._schedule_callback(self.on_sentry_activated)
 
             elif prev_sentry and not current_sentry:
                 logger.info("========== 哨兵模式已关闭 ==========")
 
-                if self._battery_monitor_task:
-                    logger.info("停止电池监控任务...")
-                    self._battery_monitor_task.cancel()
-                    self._battery_monitor_task = None
-
                 duration_min = None
+                battery_drop = None
+                recording_count = self.vehicle_state.sentry_recording_count
                 if self.vehicle_state.sentry_activated_at:
                     delta = datetime.now() - self.vehicle_state.sentry_activated_at
                     duration_min = delta.total_seconds() / 60
                     self.vehicle_state.sentry_activated_at = None
 
+                start_battery = self.vehicle_state.sentry_activated_battery_level
+                end_battery = self.vehicle_state.battery_level
+                if start_battery is not None and end_battery is not None:
+                    battery_drop = max(start_battery - end_battery, 0)
+
+                self.vehicle_state.sentry_activated_battery_level = None
+                self.vehicle_state.sentry_recording_count = 0
+                self.vehicle_state.last_sentry_event_time = None
+
                 if self.on_sentry_deactivated and self._loop:
-                    self._loop.call_soon(
-                        lambda d=duration_min: asyncio.create_task(
-                            self.on_sentry_deactivated(d)
-                        ),
+                    self._schedule_sentry_deactivated(
+                        duration_min=duration_min,
+                        battery_drop=battery_drop,
+                        recording_count=recording_count,
                     )
 
         # 更新车辆状态缓存
@@ -211,100 +218,105 @@ class MqttHandler:
             self.vehicle_state.latitude = float(payload)
         elif "/longitude" in topic:
             self.vehicle_state.longitude = float(payload)
+        elif "/center_display_state" in topic:
+            self._handle_center_display_state(payload)
         elif "/battery_level" in topic:
             try:
-                current_soc = int(payload)
-                self.vehicle_state.battery_level = current_soc
-
-                now = datetime.now()
-                if self.vehicle_state.battery_history:
-                    last_time, last_soc = self.vehicle_state.battery_history[-1]
-                    if current_soc != last_soc or (now - last_time).total_seconds() > 60:
-                        self.vehicle_state.battery_history.append((now, current_soc))
-                else:
-                    self.vehicle_state.battery_history.append((now, current_soc))
+                self.vehicle_state.battery_level = int(payload)
+                if (
+                    self.vehicle_state.sentry_mode
+                    and self.vehicle_state.sentry_activated_battery_level is None
+                ):
+                    self.vehicle_state.sentry_activated_battery_level = (
+                        self.vehicle_state.battery_level
+                    )
             except (ValueError, TypeError):
                 pass
-        elif "/rated_battery_range_km" in topic:
-            self.vehicle_state.rated_range = float(payload)
-        elif "/plugged_in" in topic:
-            self.vehicle_state.plugged_in = payload.lower() == "true"
-        elif "/power" in topic:
-            try:
-                power_kw = float(payload)
-                power_w = abs(power_kw * 1000)
-                self.vehicle_state.power = power_w
 
-                if self.vehicle_state.sentry_mode:
-                    logger.debug(f"[哨兵功率] {power_w:.0f}W")
-            except (ValueError, TypeError) as e:
-                logger.debug(f"解析功率数据失败: {payload}, 错误: {e}")
+    def _handle_center_display_state(self, payload: str) -> None:
+        """处理 TeslaMate 发布的 center_display_state。
+
+        TeslaMate 前端将 center_display_state == 7 解释为 “Sentry Mode recording”。
+        首次收到 retained 快照时只建立基线，不直接触发推送，避免服务重启后误报。
+        """
+        try:
+            current_state = int(payload)
+        except (ValueError, TypeError):
+            logger.debug(f"解析 center_display_state 失败: {payload}")
+            return
+
+        prev_state = self.vehicle_state.center_display_state
+        self.vehicle_state.center_display_state = current_state
+        logger.debug(f"center_display_state 变化: {prev_state} -> {current_state}")
+
+        if not self.vehicle_state.center_display_state_initialized:
+            self.vehicle_state.center_display_state_initialized = True
+            logger.debug("收到 center_display_state 初始快照，跳过录制事件检测")
+            return
+
+        if (
+            prev_state != SENTRY_RECORDING_DISPLAY_STATE
+            and current_state == SENTRY_RECORDING_DISPLAY_STATE
+        ):
+            logger.info("========== 检测到哨兵录制事件（TeslaMate 实时状态） ==========")
+            if config.sentry_notify_enabled:
+                self._emit_sentry_recording()
+            else:
+                logger.debug("哨兵录制通知未启用，跳过实时录制推送")
+
+    def _emit_sentry_recording(self) -> None:
+        """统一触发哨兵录制推送，复用同一套防抖逻辑。"""
+        now = datetime.now()
+
+        if (
+            self.vehicle_state.last_sentry_event_time is not None
+            and (now - self.vehicle_state.last_sentry_event_time).total_seconds()
+            <= config.sentry_recording_cooldown
+        ):
+            logger.info("哨兵录制事件在防抖窗口内，跳过推送")
+            return
+
+        self.vehicle_state.sentry_recording_count += 1
+
+        if self.on_sentry_recording and self._loop:
+            self._schedule_callback(self.on_sentry_recording)
+
+        self.vehicle_state.last_sentry_event_time = now
+
+    def _schedule_callback(self, callback: AsyncCallback) -> None:
+        """将协程安全切回主事件循环执行。"""
+        if not self._loop:
+            return
+
+        self._loop.call_soon_threadsafe(self._create_task, callback())
+
+    def _schedule_sentry_deactivated(
+        self,
+        duration_min: float | None,
+        battery_drop: int | None,
+        recording_count: int,
+    ) -> None:
+        """将哨兵关闭事件安全切回主事件循环执行。"""
+        if not self._loop or not self.on_sentry_deactivated:
+            return
+
+        self._loop.call_soon_threadsafe(
+            self._create_task,
+            self.on_sentry_deactivated(
+                duration_min,
+                battery_drop,
+                recording_count,
+            ),
+        )
+
+    @staticmethod
+    def _create_task(coro: Coroutine[Any, Any, None]) -> None:
+        """统一创建异步任务，便于从线程安全地投递到事件循环。"""
+        asyncio.create_task(coro)
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """设置事件循环"""
         self._loop = loop
-
-    async def start_battery_monitor(self) -> None:
-        """启动电池下降速率监控任务（用于哨兵录制检测）"""
-        try:
-            while True:
-                await asyncio.sleep(45)
-
-                if not self.vehicle_state.sentry_mode:
-                    continue
-
-                if self.vehicle_state.plugged_in:
-                    continue
-
-                if self.vehicle_state.state != "online":
-                    continue
-
-                now = datetime.now()
-
-                while (
-                    self.vehicle_state.battery_history
-                    and self.vehicle_state.battery_history[0][0] < now - timedelta(minutes=10)
-                ):
-                    self.vehicle_state.battery_history.popleft()
-
-                if len(self.vehicle_state.battery_history) < 5:
-                    continue
-
-                oldest_time, oldest_soc = self.vehicle_state.battery_history[0]
-                newest_time, newest_soc = self.vehicle_state.battery_history[-1]
-                time_diff_min = (newest_time - oldest_time).total_seconds() / 60
-
-                if time_diff_min < 3:
-                    continue
-
-                soc_drop = oldest_soc - newest_soc
-                drop_per_min = soc_drop / time_diff_min
-                threshold = config.sentry_battery_drop_threshold
-
-                if drop_per_min > threshold:
-                    if (
-                        self.vehicle_state.last_sentry_event_time is None
-                        or (now - self.vehicle_state.last_sentry_event_time).total_seconds()
-                        > config.sentry_recording_cooldown
-                    ):
-                        logger.info(
-                            f"========== 检测到疑似哨兵录制事件 ==========\n"
-                            f"电池下降速率: {drop_per_min:.3f}%/min (阈值: {threshold:.3f}%/min)\n"
-                            f"时间窗口: {time_diff_min:.1f} 分钟\n"
-                            f"电量变化: {oldest_soc}% -> {newest_soc}% (下降 {soc_drop}%)"
-                        )
-
-                        if self.on_sentry_recording and self._loop:
-                            self._loop.call_soon(
-                                lambda: asyncio.create_task(self.on_sentry_recording(drop_per_min)),
-                            )
-
-                        self.vehicle_state.last_sentry_event_time = now
-
-        except asyncio.CancelledError:
-            logger.info("电池监控任务已取消")
-        except Exception as e:
-            logger.exception(f"电池监控任务异常: {e}")
 
     async def _delayed_trip_end(self) -> None:
         """延迟触发行程结束处理"""
@@ -329,9 +341,10 @@ class MqttHandler:
 
         try:
             from tesla_notifier import amap
+
             address = await amap.reverse_geocode(
                 self.vehicle_state.latitude,
-                self.vehicle_state.longitude
+                self.vehicle_state.longitude,
             )
             if address:
                 return address

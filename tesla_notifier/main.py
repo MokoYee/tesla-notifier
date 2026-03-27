@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """主入口"""
 
 import asyncio
@@ -47,7 +48,10 @@ async def handle_trip_end() -> None:
             if not trip or not trip.end_date:
                 if attempt < max_retries:
                     logger.warning(
-                        f"行程数据未就绪 (trip={'存在' if trip else '不存在'}, end_date={trip.end_date if trip else 'N/A'})，{retry_delay}秒后重试"
+                        "行程数据未就绪 "
+                        f"(trip={'存在' if trip else '不存在'}, "
+                        f"end_date={trip.end_date if trip else 'N/A'})，"
+                        f"{retry_delay}秒后重试"
                     )
                     await asyncio.sleep(retry_delay)
                     continue
@@ -63,7 +67,8 @@ async def handle_trip_end() -> None:
             # 短行程过滤
             if trip.distance < config.min_trip_distance:
                 logger.info(
-                    f"行程距离过短，跳过推送: {trip.distance:.1f} km < {config.min_trip_distance} km"
+                    "行程距离过短，跳过推送: "
+                    f"{trip.distance:.1f} km < {config.min_trip_distance} km"
                 )
                 return
 
@@ -75,7 +80,11 @@ async def handle_trip_end() -> None:
             # 计算能耗和效率（使用动态 efficiency，处理负值）
             rated_range_used = max(trip.start_rated_range_km - trip.end_rated_range_km, 0)
             energy_used = (rated_range_used * car_efficiency) / 1000.0  # kWh
-            efficiency = (rated_range_used * car_efficiency) / trip.distance if trip.distance > 0 else 0  # Wh/km
+            efficiency = (
+                (rated_range_used * car_efficiency) / trip.distance
+                if trip.distance > 0
+                else 0
+            )  # Wh/km
 
             # 获取驾驶评分
             score = await database.get_trip_driving_score(trip.id)
@@ -334,17 +343,25 @@ async def handle_sentry_activated() -> None:
         logger.exception(f"处理哨兵激活异常: {e}")
 
 
-async def handle_sentry_deactivated(duration_min: float | None = None) -> None:
+async def handle_sentry_deactivated(
+    duration_min: float | None = None,
+    battery_drop: int | None = None,
+    recording_count: int = 0,
+) -> None:
     """处理哨兵模式关闭"""
     logger.info("========== 检测到哨兵模式关闭 ==========")
 
     try:
-        # 获取当前电量
+        # 获取当前位置和当前电量
+        location = await mqtt_handler.get_location_str() if mqtt_handler else None
         battery_level = mqtt_handler.vehicle_state.battery_level if mqtt_handler else None
 
         success = await bark.send_sentry_deactivated(
+            location=location,
             duration_min=duration_min,
             battery_level=battery_level,
+            battery_drop=battery_drop,
+            recording_count=recording_count,
         )
 
         if success:
@@ -356,25 +373,25 @@ async def handle_sentry_deactivated(duration_min: float | None = None) -> None:
         logger.exception(f"处理哨兵关闭异常: {e}")
 
 
-async def handle_sentry_recording(power_w: float) -> None:
+async def handle_sentry_recording() -> None:
     """处理哨兵录制事件
 
-    当哨兵模式下检测到功率跳变时触发，表示可能有人经过触发了录制。
-
-    Args:
-        power_w: 触发时的功率（W）
+    仅使用 TeslaMate 实时状态触发，避免引入不可靠的推断逻辑。
     """
-    logger.info(f"========== 检测到哨兵录制事件: {power_w:.0f}W ==========")
+    logger.info("========== 检测到哨兵录制事件（实时状态） ==========")
 
     try:
         # 获取位置和电量信息
         location = await mqtt_handler.get_location_str() if mqtt_handler else None
         battery_level = mqtt_handler.vehicle_state.battery_level if mqtt_handler else None
+        recording_count = (
+            mqtt_handler.vehicle_state.sentry_recording_count if mqtt_handler else 0
+        )
 
         success = await bark.send_sentry_recording(
-            power_w=power_w,
             location=location,
             battery_level=battery_level,
+            recording_count=recording_count,
         )
 
         if success:
@@ -400,7 +417,7 @@ async def run() -> None:
         logger.error("请检查配置后重新启动")
         sys.exit(1)
 
-    logger.info(f"配置信息:")
+    logger.info("配置信息:")
     logger.info(f"  ENABLE_CRON: {config.cron_enabled}")
     logger.info(f"  ENABLE_MQTT: {config.mqtt_enabled}")
     logger.info(f"  DAILY_CRON: {config.daily_cron}")
@@ -413,10 +430,13 @@ async def run() -> None:
     logger.info(f"  CAIYUN_TOKEN: {'(已配置)' if config.caiyun_token else '(未配置)'}")
     logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
-    logger.debug(f"  SENTRY_NOTIFY_ENABLED: 哨兵录制{'(已开启)' if config.sentry_notify_enabled else '(已关闭)'}")
+    sentry_status = "(已开启)" if config.sentry_notify_enabled else "(已关闭)"
+    logger.debug(f"  SENTRY_NOTIFY_ENABLED: 哨兵录制{sentry_status}")
     if config.sentry_notify_enabled:
-        logger.debug(f"  SENTRY_POWER_THRESHOLD: 功率阈值{config.sentry_power_threshold}W")
-        logger.debug(f"  SENTRY_RECORDING_COOLDOWN: 防抖间隔{config.sentry_recording_cooldown}s")
+        logger.debug(
+            "  SENTRY_RECORDING_COOLDOWN: "
+            f"防抖间隔{config.sentry_recording_cooldown}s"
+        )
 
     # 初始化数据库连接池
     await database.init_pool()

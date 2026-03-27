@@ -16,13 +16,19 @@ class Config:
     db_password: str = field(default_factory=lambda: os.getenv("DB_PASSWORD", ""))
 
     # MQTT
-    mqtt_enabled: bool = field(default_factory=lambda: os.getenv("ENABLE_MQTT", "").lower() == "true")
-    mqtt_url: str = field(default_factory=lambda: os.getenv("MQTT_URL", "mqtt://localhost:1883"))
+    mqtt_enabled: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_MQTT", "").lower() == "true"
+    )
+    mqtt_url: str = field(
+        default_factory=lambda: os.getenv("MQTT_URL", "mqtt://localhost:1883")
+    )
     mqtt_username: str = field(default_factory=lambda: os.getenv("MQTT_USERNAME", ""))
     mqtt_password: str = field(default_factory=lambda: os.getenv("MQTT_PASSWORD", ""))
 
     # 定时任务
-    cron_enabled: bool = field(default_factory=lambda: os.getenv("ENABLE_CRON", "").lower() == "true")
+    cron_enabled: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_CRON", "").lower() == "true"
+    )
     daily_cron: str = field(default_factory=lambda: os.getenv("DAILY_CRON", "0 8 * * *"))
     weekly_cron: str = field(default_factory=lambda: os.getenv("WEEKLY_CRON", "0 9 * * mon"))
     monthly_cron: str = field(default_factory=lambda: os.getenv("MONTHLY_CRON", "0 9 1 * *"))
@@ -56,14 +62,8 @@ class Config:
     sentry_notify_enabled: bool = field(
         default_factory=lambda: os.getenv("SENTRY_NOTIFY_ENABLED", "").upper() == "ON"
     )
-    sentry_battery_drop_threshold: float = field(
-        default_factory=lambda: float(os.getenv("SENTRY_BATTERY_DROP_THRESHOLD", "0.15"))
-    )
     sentry_recording_cooldown: int = field(
         default_factory=lambda: int(os.getenv("SENTRY_RECORDING_COOLDOWN", "300"))
-    )
-    sentry_power_threshold: float = field(
-        default_factory=lambda: float(os.getenv("SENTRY_POWER_THRESHOLD", "50"))
     )
 
     # 日志级别（DEBUG/INFO/WARNING/ERROR）

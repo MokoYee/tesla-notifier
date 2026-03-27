@@ -42,7 +42,7 @@ async def send_notification(options: BarkOptions) -> bool:
 
     url = f"{config.bark_url}/{config.bark_key}"
 
-    payload = {
+    payload: dict[str, object] = {
         "title": options.title,
         "body": options.body,
         "sound": options.sound,
@@ -63,9 +63,6 @@ async def send_notification(options: BarkOptions) -> bool:
         "准备发送推送",
         {"title": options.title, "group": options.group, "body_length": len(options.body)},
     )
-
-    last_error: Exception | None = None
-
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -91,7 +88,6 @@ async def send_notification(options: BarkOptions) -> bool:
 
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             # 网络相关异常，进行重试
-            last_error = e
             if attempt < MAX_RETRIES:
                 logger.warning(f"推送失败（第{attempt}次），{RETRY_DELAY}秒后重试: {e}")
                 await asyncio.sleep(RETRY_DELAY)
@@ -190,8 +186,15 @@ async def send_trip_end(
     if odometer is not None:
         lines.append(f"🛣️ 总里程: {odometer:.1f} km")
 
-    if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
-        lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
+    if (
+        hard_accel_count is not None
+        and hard_brake_count is not None
+        and driving_grade is not None
+    ):
+        lines.append(
+            "🏁 驾驶评分: "
+            f"急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）"
+        )
 
     lines.append("━━━━━━━━━━━━━━━━")
 
@@ -362,8 +365,15 @@ async def send_monthly_report(
         f"🏆 最长行程: {longest_trip:.1f} km",
     ]
 
-    if hard_accel_count is not None and hard_brake_count is not None and driving_grade is not None:
-        lines.append(f"🏁 驾驶评分: 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）")
+    if (
+        hard_accel_count is not None
+        and hard_brake_count is not None
+        and driving_grade is not None
+    ):
+        lines.append(
+            "🏁 驾驶评分: "
+            f"急加速{hard_accel_count}次 · 急减速{hard_brake_count}次（{driving_grade}）"
+        )
 
     return await send_notification(
         BarkOptions(
@@ -453,13 +463,14 @@ async def send_sentry_activated(
 
     lines.extend([
         "",
-        "哨兵模式已激活，正在监控车辆周围环境",
+        "已进入哨兵模式",
+        "离车期间如有异常活动，将立即推送提醒",
         "━━━━━━━━━━━━━━━━",
     ])
 
     return await send_notification(
         BarkOptions(
-            title="🛡️ 哨兵模式已激活",
+            title="🛡️ 哨兵已开启",
             body="\n".join(lines),
             group="tesla-sentry",
             level="timeSensitive",
@@ -468,11 +479,12 @@ async def send_sentry_activated(
         )
     )
 
-
-
 async def send_sentry_deactivated(
+    location: str | None = None,
     duration_min: float | None = None,
     battery_level: int | None = None,
+    battery_drop: int | None = None,
+    recording_count: int = 0,
 ) -> bool:
     """发送哨兵模式关闭推送"""
     from datetime import datetime
@@ -488,6 +500,9 @@ async def send_sentry_deactivated(
         f"🕐 {now}",
     ]
 
+    if location:
+        lines.append(f"📍 {location}")
+
     if duration_min is not None:
         hours = int(duration_min // 60)
         mins = int(duration_min % 60)
@@ -497,7 +512,13 @@ async def send_sentry_deactivated(
             lines.append(f"⏱️ 运行时长: {mins}min")
 
     if battery_level is not None:
-        lines.append(f"🔋 电量: {battery_level}%")
+        lines.append(f"🔋 结束电量: {battery_level}%")
+
+    if battery_drop is not None:
+        lines.append(f"📉 本次耗电: {battery_drop}%")
+
+    if recording_count > 0:
+        lines.append(f"🎥 触发录制: {recording_count} 次")
 
     lines.extend([
         "",
@@ -507,7 +528,7 @@ async def send_sentry_deactivated(
 
     return await send_notification(
         BarkOptions(
-            title="🛡️ 哨兵模式已关闭",
+            title="🛡️ 哨兵已关闭",
             body="\n".join(lines),
             group="tesla-sentry",
         )
@@ -515,18 +536,13 @@ async def send_sentry_deactivated(
 
 
 async def send_sentry_recording(
-    power_w: float,
     location: str | None = None,
     battery_level: int | None = None,
+    recording_count: int = 0,
 ) -> bool:
     """发送哨兵录制事件推送
 
-    当哨兵模式下检测到功率跳变（可能有人经过触发录制）时推送通知。
-
-    Args:
-        power_w: 触发时的功率（W）
-        location: 车辆位置
-        battery_level: 电池电量
+    当检测到车辆进入哨兵录制状态时推送通知。
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -547,19 +563,19 @@ async def send_sentry_recording(
     if battery_level is not None:
         lines.append(f"🔋 电量: {battery_level}%")
 
+    if recording_count > 0:
+        lines.append(f"🎥 本次第 {recording_count} 次录制")
+
     lines.extend([
         "",
-        "检测到异常活动，请及时查看车辆状态",
-        # f"⚡ 检测到功率跳变: {power_w:.0f}W",
-        "",
-        "可能有人经过，哨兵正在录制",
-        "请及时查看车辆状态",
+        "检测到异常活动",
+        "车辆已开始录制，请及时查看 Tesla App",
         "━━━━━━━━━━━━━━━━",
     ])
 
     return await send_notification(
         BarkOptions(
-            title="🎥 哨兵录制中",
+            title="🎥 哨兵检测到活动",
             body="\n".join(lines),
             group="tesla-sentry",
             level="timeSensitive",
