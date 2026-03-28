@@ -121,14 +121,6 @@ def _join_subtitle_parts(*parts: str | None) -> str | None:
         return None
     return " · ".join(subtitle_parts)
 
-
-def _normalize_advice_text(advice: str) -> str:
-    """归一化建议文案，避免出现“建议 建议 ...”的重复表达。"""
-    normalized = advice.strip()
-    normalized = re.sub(r"^建议[\s：:,-]*", "", normalized)
-    return normalized or advice.strip()
-
-
 def _format_range_km(range_km: float | None) -> str | None:
     """格式化表显续航。"""
     if range_km is None:
@@ -169,6 +161,21 @@ def _format_sentry_consumption(
     if range_part:
         return f"📉 本次消耗 {range_part}"
     return None
+
+
+def _format_trip_score(score: int, label: str) -> str:
+    """格式化行程评分展示。"""
+    return f"🏁 评分参考 {score} 分 · {label}"
+
+
+def _format_trip_actions(
+    hard_accel_count: int,
+    hard_brake_count: int,
+) -> str:
+    """格式化驾驶动作摘要。"""
+    if hard_accel_count == 0 and hard_brake_count == 0:
+        return "📌 驾驶动作 · 未检测到急加速和急减速"
+    return f"📌 驾驶动作 · 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次"
 
 
 def _normalize_event_part(part: object) -> str:
@@ -347,7 +354,6 @@ async def send_trip_end(
     driving_label: str | None = None,
     road_context: str | None = None,
     analysis_summary: str | None = None,
-    analysis_advice: str | None = None,
     traffic_label: str | None = None,
     traffic_summary: str | None = None,
     speed_avg: float | None = None,
@@ -411,7 +417,9 @@ async def send_trip_end(
         and driving_label is not None
     ):
         lines.append("")
-        lines.append(f"🏁 驾驶评分 {driving_score} 分 · {driving_label}")
+        if analysis_summary:
+            lines.append(f"🧠 行程点评 · {analysis_summary}")
+        lines.append(_format_trip_score(driving_score, driving_label))
         scene_parts = []
         if road_context:
             scene_parts.append(road_context)
@@ -419,7 +427,7 @@ async def send_trip_end(
             scene_parts.append(traffic_label)
         if scene_parts:
             lines.append(f"🧭 行驶场景 · {' · '.join(scene_parts)}")
-        lines.append(f"📌 驾驶动作 · 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次")
+        lines.append(_format_trip_actions(hard_accel_count, hard_brake_count))
 
     elif traffic_label:
         lines.append(f"🧭 行驶场景 · {traffic_label}")
@@ -427,11 +435,13 @@ async def send_trip_end(
     if traffic_summary:
         lines.append(f"🚦 沿途路况 · {traffic_summary}")
 
-    if analysis_summary:
-        lines.append(f"📈 本次表现 · {analysis_summary}")
-
-    if analysis_advice:
-        lines.append(f"💬 下次留意 · {_normalize_advice_text(analysis_advice)}")
+    if analysis_summary and (
+        hard_accel_count is None
+        or hard_brake_count is None
+        or driving_score is None
+        or driving_label is None
+    ):
+        lines.append(f"🧠 行程点评 · {analysis_summary}")
 
     return await send_notification(
         BarkOptions(

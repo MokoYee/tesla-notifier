@@ -147,7 +147,6 @@ async def _send_trip_notification(
         driving_label=score.label if score else None,
         road_context=score.road_context if score else None,
         analysis_summary=score.analysis_summary if score else None,
-        analysis_advice=score.advice if score else None,
         traffic_label=score.traffic_label if score else None,
         traffic_summary=score.traffic_summary if score else None,
         speed_avg=trip.speed_avg,

@@ -149,7 +149,6 @@ class DrivingScore:
     hard_brake_rate: float  # 每 100 km 急减速次数
     confidence: float  # 样本置信度，主要用于短途平滑
     analysis_summary: str  # 自动分析摘要
-    advice: str | None  # 行程提醒
     traffic_label: str | None = None  # 行程交通画像
     traffic_summary: str | None = None  # 行程交通摘要
     traffic_sample_count: int = 0  # 路况采样次数
@@ -988,9 +987,8 @@ def _build_driving_analysis(
     expected_accel_rate: float,
     expected_brake_rate: float,
     confidence: float,
-    traffic_summary: TrafficSummary | None,
-) -> tuple[str, str | None]:
-    """生成面向车主的行程表现与提醒
+) -> str:
+    """生成面向车主的行程点评
 
     目标是把评分结果翻译成用户能直接理解的话，而不是暴露系统分析口径。
     """
@@ -1014,40 +1012,24 @@ def _build_driving_analysis(
         cautions.append("高速阶段车速偏快")
 
     if confidence < 0.35:
-        summary = "这趟路程较短，分数波动会更明显，先把它当成一次状态提醒就好。"
-        return summary, "短途起停对分数影响更大，同路线多看几次会更接近真实状态。"
+        return "这趟更像下楼取个快递，路程太短，分数先当热身参考。"
 
-    if cautions:
-        primary_issue = cautions[0]
-        summary = f"这趟主要拉分点是{primary_issue}。"
-    elif len(positives) >= 2:
-        summary = "这趟提速和制动都比较平顺，整体状态不错。"
-    elif positives:
-        summary = f"这趟{positives[0]}，整体节奏比较平顺。"
-    else:
-        summary = "这趟整体驾驶状态比较稳定。"
-
-    if "减速收得稍晚" in cautions:
-        if traffic_summary and traffic_summary.high_pressure_ratio >= 0.5:
-            advice = "拥堵路段较多时，早点松电并多留一点跟车距离，会更从容。"
-        else:
-            advice = "跟车或进路口时再早一点收电，体感和能耗都会更稳。"
+    if "高速阶段车速偏快" in cautions:
+        summary = "这趟高速脚有点重，续航先替你叹了口气。"
+    elif "减速收得稍晚" in cautions:
+        summary = "这趟减速收得稍晚，车子差点替你先紧张。"
     elif "起步和再提速有些偏急" in cautions:
-        if traffic_summary and traffic_summary.high_pressure_ratio >= 0.5:
-            advice = "拥堵时频繁补电门收益不高，起步更柔和一些会更顺。"
-        else:
-            advice = "起步和再加速别太急，分数和能耗通常都会更好看。"
-    elif "高速阶段车速偏快" in cautions:
-        advice = "高速阶段把巡航速度收一点，续航和安全余量都会更好。"
-    elif (
-        traffic_summary
-        and traffic_summary.traffic_label in {"高压拥堵", "明显拥堵"}
-    ):
-        advice = "这趟外部路况本身就难开，能把节奏维持住已经不错。"
+        summary = "这趟起步和再提速有点着急，电门像在赶下一场。"
+    elif len(positives) >= 2:
+        summary = "这趟开得挺丝滑，乘客大概率用不上扶手。"
+    elif "提速节奏比较克制" in positives:
+        summary = "这趟提速拿捏得不错，节奏稳稳在线。"
+    elif "制动预判比较稳" in positives:
+        summary = "这趟刹车预判在线，收放比平时更从容。"
     else:
-        advice = None
+        summary = "这趟整体状态在线，没有明显掉分项。"
 
-    return summary, advice
+    return summary
 
 # ========== 急加速/急减速检测算法 ==========
 # 急加速检测参数
@@ -1304,14 +1286,13 @@ async def get_trip_driving_score(
                 blended_score = raw_score * confidence + 85.0 * (1.0 - confidence)
                 final_score = round(_clamp(blended_score, 0.0, 100.0))
                 label = _calculate_score_label(final_score)
-                analysis_summary, advice = _build_driving_analysis(
+                analysis_summary = _build_driving_analysis(
                     context,
                     hard_accel_rate,
                     hard_brake_rate,
                     expected_accel_rate,
                     expected_brake_rate,
                     confidence,
-                    traffic_summary,
                 )
 
                 return DrivingScore(
@@ -1324,7 +1305,6 @@ async def get_trip_driving_score(
                     hard_brake_rate=hard_brake_rate,
                     confidence=confidence,
                     analysis_summary=analysis_summary,
-                    advice=advice,
                     traffic_label=(
                         traffic_summary.traffic_label
                         if traffic_summary is not None
