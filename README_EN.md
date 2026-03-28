@@ -35,12 +35,11 @@ TeslaMate notification companion focused on pushes instead of a heavy backend: g
 
 ## Quick Start
 
-The recommended setup is a standalone `tesla-notifier` container attached to the same Docker network as TeslaMate. In most cases, you only need to edit `.env`, not `docker-compose.yml`.
+The simplest setup is to merge `tesla-notifier` into your existing TeslaMate `docker-compose.yml`. This avoids external-network setup and keeps everything in one stack.
 
-### 1. Download the templates
+### 1. Download the `.env` template
 
 ```bash
-curl -O https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/docker-compose.yml
 curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.example
 ```
 
@@ -50,28 +49,48 @@ curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.
 - Update `DB_PASSWORD` if your TeslaMate database password is not the default
 - The default template already matches a standard TeslaMate stack: `DB_HOST=database`, `MQTT_URL=mqtt://mosquitto:1883`
 
-<details>
-<summary>If startup says the Docker network does not exist, how do I find the actual TeslaMate network name?</summary>
+### 3. Add the service to your TeslaMate compose file
 
-```bash
-docker network ls
-docker inspect teslamate --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}'
+```yaml
+services:
+  tesla-notifier:
+    image: mokoyee/tesla-notifier:latest
+    container_name: tesla-notifier
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
 ```
 
-Replace `teslamate_default` in `docker-compose.yml` with the actual network name.
-</details>
-
-### 3. Start the service
+Then start it:
 
 ```bash
-docker compose up -d
+docker compose up -d tesla-notifier
 ```
 
 Update the image:
 
 ```bash
-docker compose pull && docker compose up -d
+docker compose pull tesla-notifier && docker compose up -d tesla-notifier
 ```
+
+<details>
+<summary>If you prefer to manage notifier as a separate stack</summary>
+
+You can use the repository [`docker-compose.yml`](docker-compose.yml) as a standalone deployment template.  
+In that mode, notifier must join the Docker external network used by TeslaMate.
+
+If startup says the network does not exist, run:
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Image}}'
+docker network ls
+```
+
+First identify the TeslaMate-related container from the container list, then find the matching `xxx_default` network in the network list.
+Replace `teslamate_default` in the standalone template with the actual network name.
+</details>
 
 ## Configuration
 

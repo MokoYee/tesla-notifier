@@ -12,6 +12,7 @@ on:
       - '.gitignore'
       - 'LICENSE'
       - '.env.example'
+      - 'docker-compose.yml'
   workflow_dispatch:
 
 env:

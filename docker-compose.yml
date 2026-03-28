@@ -1,3 +1,7 @@
+# 独立部署模板：
+# 1. 配置从 .env 读取
+# 2. 默认接入 TeslaMate 所在的 Docker 外部网络
+# 3. 如果你的外部网络名不是 teslamate_default，请按实际环境修改
 services:
   tesla-notifier:
     image: mokoyee/tesla-notifier:latest

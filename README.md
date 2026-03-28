@@ -35,12 +35,11 @@ TeslaMate 车辆状态推送插件，聚焦通知而不是重后台: 行程结�
 
 ## 快速开始
 
-推荐把 `tesla-notifier` 作为一个独立容器部署在 TeslaMate 所在的 Docker 网络中。默认情况下，你通常只需要修改 `.env`，不需要改 `docker-compose.yml`。
+推荐直接合并到你现有的 TeslaMate `docker-compose.yml` 中。这样最省心，不需要理解外部网络，也不用单独维护第二份部署文件。
 
-### 1. 下载模板文件
+### 1. 下载 `.env` 模板
 
 ```bash
-curl -O https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/docker-compose.yml
 curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.example
 ```
 
@@ -50,28 +49,48 @@ curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.
 - 如果你的 TeslaMate 数据库不是默认密码，再修改 `DB_PASSWORD`
 - 默认模板已适配 TeslaMate 标准服务名：`DB_HOST=database`、`MQTT_URL=mqtt://mosquitto:1883`
 
-<details>
-<summary>如果启动时报网络不存在，怎么查 TeslaMate 的实际 Docker 网络名？</summary>
+### 3. 在 TeslaMate 的 compose 中加入服务
 
-```bash
-docker network ls
-docker inspect teslamate --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}'
+```yaml
+services:
+  tesla-notifier:
+    image: mokoyee/tesla-notifier:latest
+    container_name: tesla-notifier
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
 ```
 
-把 `docker-compose.yml` 里的 `teslamate_default` 改成实际网络名即可。
-</details>
-
-### 3. 启动服务
+然后启动：
 
 ```bash
-docker compose up -d
+docker compose up -d tesla-notifier
 ```
 
 更新镜像：
 
 ```bash
-docker compose pull && docker compose up -d
+docker compose pull tesla-notifier && docker compose up -d tesla-notifier
 ```
+
+<details>
+<summary>如果你更喜欢把 notifier 单独维护</summary>
+
+可以直接使用仓库里的 [`docker-compose.yml`](docker-compose.yml) 作为独立部署模板。  
+这种方式需要把 notifier 接入 TeslaMate 所在的 Docker 外部网络。
+
+如果启动时报网络不存在，可先执行：
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Image}}'
+docker network ls
+```
+
+先从容器列表里找到 TeslaMate 相关容器，再从网络列表里找到对应的 `xxx_default` 网络名称。
+把独立模板里的 `teslamate_default` 改成实际网络名即可。
+</details>
 
 ## 配置说明
 
