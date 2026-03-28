@@ -293,8 +293,36 @@ async def resolve_location_name(
         return address_name or "未知地点"
 
 
-async def get_latest_trip(car_id: str) -> TripData | None:
-    """获取最新行程"""
+async def _build_trip_data(
+    conn: psycopg.AsyncConnection[Any],
+    row: tuple[Any, ...],
+) -> TripData:
+    """将数据库行转换为 TripData。"""
+    start_address = await resolve_location_name(conn, row[12], row[14], row[16])
+    end_address = await resolve_location_name(conn, row[13], row[15], row[17])
+
+    return TripData(
+        id=row[0],
+        car_id=row[1],
+        start_date=_format_utc_time(row[2]),
+        end_date=_format_utc_time(row[3]),
+        start_address=start_address,
+        end_address=end_address,
+        distance=float(row[4] or 0),
+        duration_min=float(row[5] or 0),
+        start_rated_range_km=float(row[6] or 0),
+        end_rated_range_km=float(row[7] or 0),
+        start_battery_level=int(row[8] or 0),
+        end_battery_level=int(row[9] or 0),
+        outside_temp_avg=float(row[10]) if row[10] else None,
+        speed_max=float(row[11]) if row[11] else None,
+        speed_avg=float(row[18]) if row[18] else None,
+        odometer=float(row[19]) if row[19] else None,
+    )
+
+
+async def get_recent_trips(car_id: str, limit: int = 5) -> list[TripData]:
+    """获取最近结束的行程列表。"""
     try:
         async with get_connection() as conn:
             async with conn.cursor() as cur:
@@ -327,47 +355,28 @@ async def get_latest_trip(car_id: str) -> TripData | None:
                     LEFT JOIN addresses sa ON d.start_address_id = sa.id
                     LEFT JOIN addresses ea ON d.end_address_id = ea.id
                     LEFT JOIN positions sp ON d.start_position_id = sp.id
-                    LEFT JOIN positions ep ON d.end_position_id = ep.id
-                    WHERE d.car_id = %s AND d.end_date IS NOT NULL
-                    ORDER BY d.end_date DESC
-                    LIMIT 1
-                    """,
-                    (car_id,),
+                        LEFT JOIN positions ep ON d.end_position_id = ep.id
+                        WHERE d.car_id = %s AND d.end_date IS NOT NULL
+                        ORDER BY d.end_date DESC
+                        LIMIT %s
+                        """,
+                    (car_id, limit),
                 )
-                row = await cur.fetchone()
+                rows = await cur.fetchall()
 
-                if not row:
-                    return None
-
-                # 解析起点和终点位置名称
-                start_address = await resolve_location_name(
-                    conn, row[12], row[14], row[16]
-                )
-                end_address = await resolve_location_name(
-                    conn, row[13], row[15], row[17]
-                )
-
-                return TripData(
-                    id=row[0],
-                    car_id=row[1],
-                    start_date=_format_utc_time(row[2]),
-                    end_date=_format_utc_time(row[3]),
-                    start_address=start_address,
-                    end_address=end_address,
-                    distance=float(row[4] or 0),
-                    duration_min=float(row[5] or 0),
-                    start_rated_range_km=float(row[6] or 0),
-                    end_rated_range_km=float(row[7] or 0),
-                    start_battery_level=int(row[8] or 0),
-                    end_battery_level=int(row[9] or 0),
-                    outside_temp_avg=float(row[10]) if row[10] else None,
-                    speed_max=float(row[11]) if row[11] else None,
-                    speed_avg=float(row[18]) if row[18] else None,
-                    odometer=float(row[19]) if row[19] else None,
-                )
+            trips: list[TripData] = []
+            for row in rows:
+                trips.append(await _build_trip_data(conn, row))
+            return trips
     except Exception as e:
-        logger.exception(f"查询最新行程失败: {e}")
-        return None
+        logger.exception(f"查询最近行程失败: {e}")
+        return []
+
+
+async def get_latest_trip(car_id: str) -> TripData | None:
+    """获取最新行程。"""
+    trips = await get_recent_trips(car_id, limit=1)
+    return trips[0] if trips else None
 
 
 async def get_latest_charging(car_id: str) -> ChargingData | None:

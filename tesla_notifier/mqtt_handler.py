@@ -75,6 +75,7 @@ class VehicleState:
     active_charging_issue: str | None = None
     last_charging_issue_key: str | None = None
     last_charging_issue_time: datetime | None = None
+    drive_state_version: int = 0
 
 
 @dataclass
@@ -85,6 +86,7 @@ class MqttHandler:
     on_trip_started: AsyncCallback | None = None
     on_trip_stopped: AsyncCallback | None = None
     on_trip_end: AsyncCallback | None = None
+    on_trip_offline_reconcile: AsyncCallback | None = None
     on_charging_complete: AsyncCallback | None = None
     on_sentry_activated: AsyncCallback | None = None
     on_sentry_deactivated: AsyncSentryDeactivatedCallback | None = None
@@ -230,6 +232,9 @@ class MqttHandler:
         """处理车辆状态变化"""
         prev_state = self.vehicle_state.state
         self.vehicle_state.state = payload
+        if prev_state != payload:
+            self.vehicle_state.drive_state_version += 1
+        state_version = self.vehicle_state.drive_state_version
 
         logger.info(f"state 变化: {prev_state} -> {payload}")
 
@@ -246,6 +251,18 @@ class MqttHandler:
                 logger.info("将在 3 秒后触发行程结束处理")
                 asyncio.run_coroutine_threadsafe(
                     self._delayed_trip_end(),
+                    self._loop,
+                )
+
+        if prev_state == "driving" and payload == "offline":
+            logger.info("检测到车辆驾驶中离线，进入行程补偿窗口")
+            if self.on_trip_offline_reconcile and self._loop:
+                logger.info(
+                    "将在 "
+                    f"{config.trip_offline_reconcile_delay} 秒后执行行程离线补偿检查"
+                )
+                asyncio.run_coroutine_threadsafe(
+                    self._delayed_trip_offline_reconcile(state_version),
                     self._loop,
                 )
 
@@ -756,6 +773,25 @@ class MqttHandler:
         logger.info("延迟结束，开始触发行程结束处理")
         if self.on_trip_end:
             await self.on_trip_end()
+
+    async def _delayed_trip_offline_reconcile(self, expected_state_version: int) -> None:
+        """在地下车库等弱网场景下，为超时结案提供延迟补偿检查。"""
+        logger.info(
+            f"等待 {config.trip_offline_reconcile_delay} 秒后执行行程离线补偿检查..."
+        )
+        await asyncio.sleep(float(config.trip_offline_reconcile_delay))
+
+        if self.vehicle_state.drive_state_version != expected_state_version:
+            logger.info("行程离线补偿窗口内状态已变化，取消本次补偿检查")
+            return
+
+        if self.vehicle_state.state != "offline":
+            logger.info("车辆状态已不再是 offline，跳过本次补偿检查")
+            return
+
+        logger.info("离线补偿窗口结束，开始执行行程补偿检查")
+        if self.on_trip_offline_reconcile:
+            await self.on_trip_offline_reconcile()
 
     async def _delayed_charging_complete(self) -> None:
         """延迟触发充电完成处理"""

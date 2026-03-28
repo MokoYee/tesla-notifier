@@ -174,6 +174,33 @@ class TrafficSampler:
             sampling_task.cancel()
             await asyncio.gather(sampling_task, return_exceptions=True)
 
+    async def discard_active_trip(self) -> None:
+        """丢弃未正常结束的路况采样会话，避免离线超时后串到下一趟行程。"""
+        async with self._lock:
+            session = self._active_session
+            self._active_session = None
+            self._sampling_inflight = False
+            sampling_task = self._sampling_task
+            self._sampling_task = None
+            finalize_event = self._stop_finalize_event
+            self._stop_finalize_event = None
+
+        if sampling_task is not None:
+            sampling_task.cancel()
+            await asyncio.gather(sampling_task, return_exceptions=True)
+
+        if session is not None:
+            logger.info(f"已丢弃未完成的路况采样会话: {session.session_id}")
+            self._delete_session_file(session.session_id)
+        else:
+            stale_session = self._load_latest_active_session()
+            if stale_session is not None:
+                logger.info(f"已清理遗留的路况采样会话: {stale_session.session_id}")
+                self._delete_session_file(stale_session.session_id)
+
+        if finalize_event is not None and not finalize_event.is_set():
+            finalize_event.set()
+
     async def update_position(
         self,
         latitude: float | None,

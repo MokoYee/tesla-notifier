@@ -69,6 +69,15 @@ class Config:
     min_trip_distance: float = field(
         default_factory=lambda: float(os.getenv("MIN_TRIP_DISTANCE", "1"))
     )
+    trip_compensation_interval: int = field(
+        default_factory=lambda: int(os.getenv("TRIP_COMPENSATION_INTERVAL", "300"))
+    )
+    trip_offline_reconcile_delay: int = field(
+        default_factory=lambda: int(os.getenv("TRIP_OFFLINE_RECONCILE_DELAY", "960"))
+    )
+    trip_compensation_max_age_hours: int = field(
+        default_factory=lambda: int(os.getenv("TRIP_COMPENSATION_MAX_AGE_HOURS", "24"))
+    )
 
     # 时区
     timezone: str = field(default_factory=lambda: os.getenv("TZ", "Asia/Shanghai"))
@@ -166,6 +175,15 @@ class Config:
         # Bark 推送密钥是必需的
         if not self.bark_key:
             errors.append("BARK_KEY 未配置（必需）")
+
+        if self.trip_compensation_interval < 60:
+            errors.append("TRIP_COMPENSATION_INTERVAL 建议不小于 60 秒")
+
+        if self.trip_offline_reconcile_delay < 60:
+            errors.append("TRIP_OFFLINE_RECONCILE_DELAY 建议不小于 60 秒")
+
+        if self.trip_compensation_max_age_hours < 1:
+            errors.append("TRIP_COMPENSATION_MAX_AGE_HOURS 必须大于等于 1")
 
         return errors
 

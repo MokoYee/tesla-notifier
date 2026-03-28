@@ -4,6 +4,8 @@
 import asyncio
 import signal
 import sys
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
 
@@ -25,7 +27,188 @@ logger = setup_logger("main")
 mqtt_handler: MqttHandler | None = None
 scheduler: Scheduler | None = None
 traffic_sampler: TrafficSampler | None = None
+trip_compensation_task: asyncio.Task[None] | None = None
 _shutdown_event: asyncio.Event | None = None
+_trip_processing_lock: asyncio.Lock | None = None
+
+TRIP_COMPENSATION_RECENT_LIMIT = 5
+TRIP_COMPENSATION_STARTUP_DELAY = 30.0
+
+
+def _get_trip_processing_lock() -> asyncio.Lock:
+    """获取行程推送互斥锁，避免实时推送与补偿推送并发重复发送。"""
+    global _trip_processing_lock
+    if _trip_processing_lock is None:
+        _trip_processing_lock = asyncio.Lock()
+    return _trip_processing_lock
+
+
+def _parse_trip_end_time(trip: database.TripData) -> datetime | None:
+    """解析行程结束时间，失败时返回 None。"""
+    if not trip.end_date:
+        return None
+
+    try:
+        return datetime.fromisoformat(trip.end_date)
+    except ValueError:
+        logger.warning(f"解析行程结束时间失败，跳过补偿判断: trip_id={trip.id}")
+        return None
+
+
+def _select_trip_for_compensation(
+    trips: list[database.TripData],
+) -> database.TripData | None:
+    """从最近行程中挑选一个适合补偿推送的候选项。"""
+    cutoff = datetime.now(UTC) - timedelta(hours=config.trip_compensation_max_age_hours)
+
+    for trip in trips:
+        if push_state.is_trip_pushed(trip.id):
+            continue
+
+        if trip.distance < config.min_trip_distance:
+            continue
+
+        end_time = _parse_trip_end_time(trip)
+        if end_time is None:
+            continue
+
+        if end_time < cutoff:
+            logger.info(
+                "候选行程已超出补偿窗口，停止继续补偿: "
+                f"id={trip.id}, end_time={trip.end_date}"
+            )
+            return None
+
+        return trip
+
+    return None
+
+
+def _should_skip_trip_compensation(trigger_reason: str) -> bool:
+    """行驶中不执行补偿检查，避免把上一段旧行程在当前行驶期间补发。"""
+    if mqtt_handler and mqtt_handler.vehicle_state.state == "driving":
+        logger.info(f"车辆当前仍在 driving，跳过本次行程补偿检查: {trigger_reason}")
+        return True
+
+    return False
+
+
+async def _send_trip_notification(
+    trip: database.TripData,
+    trigger_reason: str,
+    *,
+    include_traffic_summary: bool,
+) -> bool:
+    """发送单条行程通知。"""
+    logger.info(
+        "准备推送行程数据: "
+        f"id={trip.id}, distance={trip.distance:.1f} km, reason={trigger_reason}"
+    )
+
+    car_efficiency = await database.get_car_efficiency(config.car_id)
+
+    rated_range_used = max(trip.start_rated_range_km - trip.end_rated_range_km, 0)
+    energy_used = (rated_range_used * car_efficiency) / 1000.0
+    efficiency = (
+        (rated_range_used * car_efficiency) / trip.distance if trip.distance > 0 else 0
+    )
+
+    trip_traffic_summary = None
+    if include_traffic_summary and traffic_sampler is not None:
+        await traffic_sampler.wait_for_stop_finalize()
+        trip_traffic_summary = await traffic_sampler.consume_finished_summary()
+    elif traffic_sampler is not None:
+        await traffic_sampler.discard_active_trip()
+
+    score = await database.get_trip_driving_score(
+        trip.id,
+        traffic_summary=trip_traffic_summary,
+    )
+
+    success = await bark.send_trip_end(
+        start_address=trip.start_address,
+        end_address=trip.end_address,
+        start_time=trip.start_date,
+        end_time=trip.end_date,
+        distance=trip.distance,
+        duration=trip.duration_min,
+        energy_used=energy_used,
+        efficiency=efficiency,
+        start_range=trip.start_rated_range_km,
+        end_range=trip.end_rated_range_km,
+        start_soc=trip.start_battery_level,
+        end_soc=trip.end_battery_level,
+        outside_temp=trip.outside_temp_avg,
+        hard_accel_count=score.hard_accel_count if score else None,
+        hard_brake_count=score.hard_brake_count if score else None,
+        driving_score=score.score if score else None,
+        driving_label=score.label if score else None,
+        road_context=score.road_context if score else None,
+        analysis_summary=score.analysis_summary if score else None,
+        analysis_advice=score.advice if score else None,
+        traffic_label=score.traffic_label if score else None,
+        traffic_summary=score.traffic_summary if score else None,
+        traffic_sample_count=score.traffic_sample_count if score else None,
+        speed_avg=trip.speed_avg,
+        speed_max=trip.speed_max,
+        odometer=trip.odometer,
+    )
+
+    if success:
+        push_state.mark_trip_pushed(trip.id)
+        logger.info(f"行程推送成功: {trip.id}, reason={trigger_reason}")
+    else:
+        logger.error(f"行程推送失败: {trip.id}, reason={trigger_reason}")
+
+    return success
+
+
+async def reconcile_trip_notification(trigger_reason: str) -> bool:
+    """补偿检查最近已结束但未推送的行程。"""
+    if _should_skip_trip_compensation(trigger_reason):
+        return False
+
+    async with _get_trip_processing_lock():
+        trips = await database.get_recent_trips(
+            config.car_id,
+            limit=TRIP_COMPENSATION_RECENT_LIMIT,
+        )
+        if not trips:
+            logger.info(f"未查询到可补偿的最近行程: {trigger_reason}")
+            return False
+
+        trip = _select_trip_for_compensation(trips)
+        if trip is None:
+            logger.info(f"最近行程均无需补偿推送: {trigger_reason}")
+            return False
+
+        return await _send_trip_notification(
+            trip,
+            trigger_reason,
+            include_traffic_summary=False,
+        )
+
+
+async def run_trip_compensation_worker() -> None:
+    """后台巡检最近结束但未推送的行程，兜底 MQTT 弱网和服务重启场景。"""
+    logger.info("行程补偿巡检任务已启动")
+
+    try:
+        await asyncio.sleep(TRIP_COMPENSATION_STARTUP_DELAY)
+
+        trigger_reason = "startup-reconcile"
+
+        while True:
+            try:
+                await reconcile_trip_notification(trigger_reason)
+            except Exception as e:
+                logger.exception(f"行程补偿巡检执行异常: {e}")
+
+            trigger_reason = "periodic-reconcile"
+            await asyncio.sleep(float(config.trip_compensation_interval))
+    except asyncio.CancelledError:
+        logger.info("行程补偿巡检任务已停止")
+        raise
 
 
 async def handle_trip_end() -> None:
@@ -41,110 +224,50 @@ async def handle_trip_end() -> None:
     max_retries = 2  # state-based 检测后数据应该已就绪
     retry_delay = 2.0  # 缩短重试间隔
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            logger.info(f"尝试获取行程数据 (第 {attempt}/{max_retries} 次)")
-            trip = await database.get_latest_trip(config.car_id)
+    async with _get_trip_processing_lock():
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"尝试获取行程数据 (第 {attempt}/{max_retries} 次)")
+                trip = await database.get_latest_trip(config.car_id)
 
-            # 检查行程数据是否就绪（end_date 不为空表示行程已完成）
-            if not trip or not trip.end_date:
-                if attempt < max_retries:
-                    logger.warning(
-                        "行程数据未就绪 "
-                        f"(trip={'存在' if trip else '不存在'}, "
-                        f"end_date={trip.end_date if trip else 'N/A'})，"
-                        f"{retry_delay}秒后重试"
-                    )
-                    await asyncio.sleep(retry_delay)
-                    continue
-                else:
+                if not trip or not trip.end_date:
+                    if attempt < max_retries:
+                        logger.warning(
+                            "行程数据未就绪 "
+                            f"(trip={'存在' if trip else '不存在'}, "
+                            f"end_date={trip.end_date if trip else 'N/A'})，"
+                            f"{retry_delay}秒后重试"
+                        )
+                        await asyncio.sleep(retry_delay)
+                        continue
+
                     logger.error("行程数据获取失败，已达最大重试次数")
                     return
 
-            # 去重检查
-            if push_state.is_trip_pushed(trip.id):
-                logger.info(f"该行程已推送过，跳过: {trip.id}")
-                return
+                if push_state.is_trip_pushed(trip.id):
+                    logger.info(f"该行程已推送过，跳过: {trip.id}")
+                    return
 
-            # 短行程过滤
-            if trip.distance < config.min_trip_distance:
-                logger.info(
-                    "行程距离过短，跳过推送: "
-                    f"{trip.distance:.1f} km < {config.min_trip_distance} km"
+                if trip.distance < config.min_trip_distance:
+                    logger.info(
+                        "行程距离过短，跳过推送: "
+                        f"{trip.distance:.1f} km < {config.min_trip_distance} km"
+                    )
+                    return
+
+                await _send_trip_notification(
+                    trip,
+                    "mqtt-state-end",
+                    include_traffic_summary=True,
                 )
                 return
-
-            logger.info(f"准备推送行程数据: id={trip.id}, distance={trip.distance:.1f} km")
-
-            # 获取车辆动态 efficiency 值
-            car_efficiency = await database.get_car_efficiency(config.car_id)
-
-            # 计算能耗和效率（使用动态 efficiency，处理负值）
-            rated_range_used = max(trip.start_rated_range_km - trip.end_rated_range_km, 0)
-            energy_used = (rated_range_used * car_efficiency) / 1000.0  # kWh
-            efficiency = (
-                (rated_range_used * car_efficiency) / trip.distance
-                if trip.distance > 0
-                else 0
-            )  # Wh/km
-
-            trip_traffic_summary = (
-                None
-            )
-            if traffic_sampler is not None:
-                await traffic_sampler.wait_for_stop_finalize()
-                trip_traffic_summary = await traffic_sampler.consume_finished_summary()
-
-            # 获取驾驶评分
-            score = await database.get_trip_driving_score(
-                trip.id,
-                traffic_summary=trip_traffic_summary,
-            )
-
-            success = await bark.send_trip_end(
-                start_address=trip.start_address,
-                end_address=trip.end_address,
-                start_time=trip.start_date,
-                end_time=trip.end_date,
-                distance=trip.distance,
-                duration=trip.duration_min,
-                energy_used=energy_used,
-                efficiency=efficiency,
-                start_range=trip.start_rated_range_km,
-                end_range=trip.end_rated_range_km,
-                start_soc=trip.start_battery_level,
-                end_soc=trip.end_battery_level,
-                outside_temp=trip.outside_temp_avg,
-                hard_accel_count=score.hard_accel_count if score else None,
-                hard_brake_count=score.hard_brake_count if score else None,
-                driving_score=score.score if score else None,
-                driving_label=score.label if score else None,
-                road_context=score.road_context if score else None,
-                analysis_summary=score.analysis_summary if score else None,
-                analysis_advice=score.advice if score else None,
-                traffic_label=score.traffic_label if score else None,
-                traffic_summary=score.traffic_summary if score else None,
-                traffic_sample_count=score.traffic_sample_count if score else None,
-                speed_avg=trip.speed_avg,
-                speed_max=trip.speed_max,
-                odometer=trip.odometer,
-            )
-
-            if success:
-                push_state.mark_trip_pushed(trip.id)
-                logger.info(f"行程推送成功: {trip.id}")
-            else:
-                logger.error(f"行程推送失败: {trip.id}")
-
-            return  # 成功处理，退出重试循环
-
-        except Exception as e:
-            logger.exception(f"处理行程结束异常: {e}")
-            if attempt < max_retries:
-                logger.info(f"发生异常，{retry_delay}秒后重试 ({attempt}/{max_retries})")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error("处理行程结束失败，已达最大重试次数")
+            except Exception as e:
+                logger.exception(f"处理行程结束异常: {e}")
+                if attempt < max_retries:
+                    logger.info(f"发生异常，{retry_delay}秒后重试 ({attempt}/{max_retries})")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error("处理行程结束失败，已达最大重试次数")
 
 
 async def handle_trip_started() -> None:
@@ -161,6 +284,12 @@ async def handle_trip_stopped() -> None:
         return
 
     await traffic_sampler.stop_trip()
+
+
+async def handle_trip_offline_reconcile() -> None:
+    """在 TeslaMate 进入 driving/offline 超时窗口后执行一次延迟补偿检查。"""
+    logger.info("========== 开始执行离线行程补偿检查 ==========")
+    await reconcile_trip_notification("mqtt-offline-reconcile")
 
 
 async def handle_position_update(
@@ -546,7 +675,7 @@ async def handle_charging_issue_alert() -> None:
 
 async def run() -> None:
     """运行服务"""
-    global mqtt_handler, scheduler, traffic_sampler
+    global mqtt_handler, scheduler, traffic_sampler, trip_compensation_task, _trip_processing_lock
 
     logger.info("========== Tesla Notifier 启动 ==========")
 
@@ -571,6 +700,17 @@ async def run() -> None:
     logger.info(f"  CAIYUN_TOKEN: {'(已配置)' if config.caiyun_token else '(未配置)'}")
     logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
+    logger.debug(
+        f"  TRIP_COMPENSATION_INTERVAL: {config.trip_compensation_interval}s"
+    )
+    logger.debug(
+        "  TRIP_OFFLINE_RECONCILE_DELAY: "
+        f"{config.trip_offline_reconcile_delay}s"
+    )
+    logger.debug(
+        "  TRIP_COMPENSATION_MAX_AGE_HOURS: "
+        f"{config.trip_compensation_max_age_hours}h"
+    )
     traffic_status = (
         "(已开启)"
         if config.traffic_analysis_enabled and config.amap_key
@@ -614,6 +754,7 @@ async def run() -> None:
 
     # 初始化数据库连接池
     await database.init_pool()
+    _trip_processing_lock = asyncio.Lock()
 
     loop = asyncio.get_event_loop()
 
@@ -626,6 +767,7 @@ async def run() -> None:
             on_trip_started=handle_trip_started,
             on_trip_stopped=handle_trip_stopped,
             on_trip_end=handle_trip_end,
+            on_trip_offline_reconcile=handle_trip_offline_reconcile,
             on_charging_complete=handle_charging_complete,
             on_sentry_activated=handle_sentry_activated,
             on_sentry_deactivated=handle_sentry_deactivated,
@@ -639,6 +781,8 @@ async def run() -> None:
         mqtt_handler.connect()
     else:
         logger.warning("MQTT 订阅未启用 (设置 ENABLE_MQTT=true 启用)")
+
+    trip_compensation_task = asyncio.create_task(run_trip_compensation_worker())
 
     # 启动定时任务
     if config.cron_enabled:
@@ -670,7 +814,7 @@ async def run() -> None:
 
 async def cleanup() -> None:
     """清理所有资源（统一的清理函数）"""
-    global mqtt_handler, scheduler, traffic_sampler
+    global mqtt_handler, scheduler, traffic_sampler, trip_compensation_task
 
     logger.info("========== 正在停止服务 ==========")
 
@@ -680,6 +824,12 @@ async def cleanup() -> None:
             scheduler.stop()
         except Exception as e:
             logger.error(f"停止定时任务失败: {e}")
+
+    if trip_compensation_task:
+        trip_compensation_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await trip_compensation_task
+        trip_compensation_task = None
 
     # 断开 MQTT 连接
     if mqtt_handler:
