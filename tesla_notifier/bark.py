@@ -380,16 +380,16 @@ async def send_trip_end(
         traffic_line = traffic_label
         if traffic_sample_count:
             traffic_line = f"{traffic_line} · 采样{traffic_sample_count}次"
-        lines.append(f"🚦 路况 {traffic_line}")
+        lines.append(f"🚦 路况 · {traffic_line}")
 
     if traffic_summary:
-        lines.append(f"🗺️ 交通 {traffic_summary}")
+        lines.append(f"🗺️ 交通 · {traffic_summary}")
 
     if analysis_summary:
-        lines.append(f"🧠 分析 {analysis_summary}")
+        lines.append(f"🧠 分析 · {analysis_summary}")
 
     if analysis_advice:
-        lines.append(f"💡 {_normalize_advice_text(analysis_advice)}")
+        lines.append(f"💡 建议 · {_normalize_advice_text(analysis_advice)}")
 
     return await send_notification(
         BarkOptions(
