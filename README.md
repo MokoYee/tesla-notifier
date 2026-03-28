@@ -46,86 +46,38 @@ curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.
 
 ### 2. 编辑 `.env`
 
-至少修改：
+- 至少填写 `BARK_KEY`
+- 如果你的 TeslaMate 数据库不是默认密码，再修改 `DB_PASSWORD`
+- 默认模板已适配 TeslaMate 标准服务名：`DB_HOST=database`、`MQTT_URL=mqtt://mosquitto:1883`
 
-- `BARK_KEY`
-- `DB_PASSWORD`（如果你的 TeslaMate 数据库不是默认密码）
+<details>
+<summary>如果启动时报网络不存在，怎么查 TeslaMate 的实际 Docker 网络名？</summary>
 
-默认模板已经适配 TeslaMate 标准服务名：
-
-- `DB_HOST=database`
-- `MQTT_URL=mqtt://mosquitto:1883`
-
-如果你的 TeslaMate 服务名或端口不同，再按实际环境修改。
-
-### 3. 如有需要，调整 Docker 网络名
-
-仓库里的 `docker-compose.yml` 默认使用外部网络 `teslamate_default`。  
-如果你的 TeslaMate 实际网络名不是这个，只需要改这一处：
-
-```yaml
-networks:
-  teslamate_default:
-    external: true
+```bash
+docker network ls
+docker inspect teslamate --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}'
 ```
 
-### 4. 启动服务
+把 `docker-compose.yml` 里的 `teslamate_default` 改成实际网络名即可。
+</details>
+
+### 3. 启动服务
 
 ```bash
 docker compose up -d
 ```
 
-### 5. 更新镜像
+更新镜像：
 
 ```bash
 docker compose pull && docker compose up -d
 ```
 
-## 快速配置示例
-
-下面是一份最常见、最容易直接用的 `.env` 示例：
-
-```bash
-BARK_KEY=your_bark_key
-
-DB_HOST=database
-DB_PORT=5432
-DB_NAME=teslamate
-DB_USER=teslamate
-DB_PASSWORD=teslamate
-
-ENABLE_MQTT=true
-MQTT_URL=mqtt://mosquitto:1883
-
-ENABLE_CRON=true
-DAILY_CRON=0 8 * * *
-WEEKLY_CRON=0 9 * * mon
-MONTHLY_CRON=0 9 1 * *
-
-CAR_ID=1
-TZ=Asia/Shanghai
-```
-
 ## 配置说明
 
-完整环境变量说明请参考 [docs/environment.md](docs/environment.md)。
-
-常用配置：
-
-- `BARK_KEY`：必填，Bark 推送密钥
-- `CAIYUN_TOKEN`：可选，补充更详细的天气信息
-- `AMAP_KEY`：可选，补充更准确的中文地址
-- `SENTRY_NOTIFY_ENABLED`：可选，开启哨兵事件提醒
-- `DEPARTURE_SAFETY_NOTIFY_ENABLED`：可选，开启离车安全提醒
-- `TPMS_NOTIFY_ENABLED`：可选，开启胎压异常提醒
-- `CHARGING_ISSUE_NOTIFY_ENABLED`：可选，开启充电异常提醒
-- `TRAFFIC_ANALYSIS_ENABLED`：可选，开启行程路况增强分析
-
-默认已启用但通常无需显式配置：
-
-- 弱网行程补偿
-- 系统健康通知
-- `./data` 下的推送状态持久化
+- 完整环境变量说明请参考 [docs/environment.md](docs/environment.md)
+- 常用可选功能：`AMAP_KEY`、`CAIYUN_TOKEN`、`SENTRY_NOTIFY_ENABLED`、`DEPARTURE_SAFETY_NOTIFY_ENABLED`、`TPMS_NOTIFY_ENABLED`、`CHARGING_ISSUE_NOTIFY_ENABLED`
+- 弱网行程补偿、系统健康通知和 `./data` 状态持久化默认已启用，一般无需额外配置
 
 ## 天气服务
 
@@ -170,7 +122,7 @@ Tesla API → TeslaMate → PostgreSQL
 - `TeslaMate` 是其原项目及相关权利人的名称/标识。本项目仅用于兼容说明，不主张相关商标权。
 - 本项目默认通过 TeslaMate 已公开的 MQTT / PostgreSQL 数据进行读取与通知，不包含 TeslaMate 官方源码分发。
 - 如果你自行修改、分发或通过网络提供修改后的 TeslaMate 实例，请自行遵守 TeslaMate 上游项目的 `AGPL-3.0` 许可证及其商标政策。
-- 本项目当前保留 `GPL-3.0`，不建议在未完成版权归属梳理前直接改成 `MIT`；若未来直接引入或修改 TeslaMate 上游源码，再单独评估是否需要切换到 `AGPL-3.0` 兼容策略。
+- 本仓库当前采用 `GPL-3.0` 许可证，具体条款请参见 [LICENSE](LICENSE)。
 - 因上游协议、商标使用、部署方式或合规要求带来的风险，需要由实际部署者自行评估并承担。
 
 ## 许可证

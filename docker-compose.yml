@@ -11,5 +11,10 @@ services:
       - teslamate_default
 
 networks:
+  # 如果你的 TeslaMate Docker 网络名不是 teslamate_default，请改成实际网络名。
+  # 可先执行：
+  # docker network ls
+  # 或：
+  # docker inspect teslamate --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}'
   teslamate_default:
     external: true

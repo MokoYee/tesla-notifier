@@ -46,84 +46,38 @@ curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.
 
 ### 2. Edit `.env`
 
-At minimum, set:
+- Set `BARK_KEY`
+- Update `DB_PASSWORD` if your TeslaMate database password is not the default
+- The default template already matches a standard TeslaMate stack: `DB_HOST=database`, `MQTT_URL=mqtt://mosquitto:1883`
 
-- `BARK_KEY`
-- `DB_PASSWORD` if your TeslaMate database password is not the default
+<details>
+<summary>If startup says the Docker network does not exist, how do I find the actual TeslaMate network name?</summary>
 
-The default template already matches a standard TeslaMate stack:
-
-- `DB_HOST=database`
-- `MQTT_URL=mqtt://mosquitto:1883`
-
-Only change them if your TeslaMate service names or ports are different.
-
-### 3. Adjust the Docker network name if needed
-
-The repository template uses the external network `teslamate_default` by default.  
-If your TeslaMate network has a different name, change this block once:
-
-```yaml
-networks:
-  teslamate_default:
-    external: true
+```bash
+docker network ls
+docker inspect teslamate --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}'
 ```
 
-### 4. Start the service
+Replace `teslamate_default` in `docker-compose.yml` with the actual network name.
+</details>
+
+### 3. Start the service
 
 ```bash
 docker compose up -d
 ```
 
-### 5. Update the image
+Update the image:
 
 ```bash
 docker compose pull && docker compose up -d
 ```
 
-## Quick `.env` Example
-
-```bash
-BARK_KEY=your_bark_key
-
-DB_HOST=database
-DB_PORT=5432
-DB_NAME=teslamate
-DB_USER=teslamate
-DB_PASSWORD=teslamate
-
-ENABLE_MQTT=true
-MQTT_URL=mqtt://mosquitto:1883
-
-ENABLE_CRON=true
-DAILY_CRON=0 8 * * *
-WEEKLY_CRON=0 9 * * mon
-MONTHLY_CRON=0 9 1 * *
-
-CAR_ID=1
-TZ=Asia/Shanghai
-```
-
 ## Configuration
 
-See [docs/environment.md](docs/environment.md) for the full environment variable reference.
-
-Common options:
-
-- `BARK_KEY`: required, your Bark push key
-- `CAIYUN_TOKEN`: optional, richer weather details
-- `AMAP_KEY`: optional, better Chinese addresses
-- `SENTRY_NOTIFY_ENABLED`: optional, sentry notifications
-- `DEPARTURE_SAFETY_NOTIFY_ENABLED`: optional, departure safety alerts
-- `TPMS_NOTIFY_ENABLED`: optional, tire pressure alerts
-- `CHARGING_ISSUE_NOTIFY_ENABLED`: optional, charging issue alerts
-- `TRAFFIC_ANALYSIS_ENABLED`: optional, traffic-aware trip analysis
-
-Enabled by default and usually not needed in `.env`:
-
-- weak-network trip compensation
-- system health notifications
-- push state persistence under `./data`
+- See [docs/environment.md](docs/environment.md) for the full environment variable reference
+- Common optional features: `AMAP_KEY`, `CAIYUN_TOKEN`, `SENTRY_NOTIFY_ENABLED`, `DEPARTURE_SAFETY_NOTIFY_ENABLED`, `TPMS_NOTIFY_ENABLED`, `CHARGING_ISSUE_NOTIFY_ENABLED`
+- Weak-network trip compensation, system health notifications, and push state persistence under `./data` are enabled by default and usually do not need extra setup
 
 ## Weather Services
 
@@ -168,7 +122,7 @@ Tesla API → TeslaMate → PostgreSQL
 - `TeslaMate` is referenced only for compatibility purposes. All related names and marks remain the property of their respective owners.
 - By default, this project only reads data exposed by TeslaMate through MQTT / PostgreSQL and does not redistribute TeslaMate source code.
 - If you modify, distribute, or provide a modified TeslaMate instance over a network, you are responsible for complying with TeslaMate's upstream `AGPL-3.0` license and trademark policy.
-- This project currently stays on `GPL-3.0`. Switching it straight to `MIT` is not recommended before you fully verify copyright ownership and confirm there is no GPL/AGPL-derived code in the tree.
+- This repository is currently licensed under `GPL-3.0`. See [LICENSE](LICENSE) for the full text.
 - The actual deployer is responsible for assessing and bearing any compliance, trademark, licensing, or operational risks arising from their usage model.
 
 ## License
