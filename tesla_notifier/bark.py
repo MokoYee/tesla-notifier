@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -81,6 +82,12 @@ def _join_subtitle_parts(*parts: str | None) -> str | None:
     if not subtitle_parts:
         return None
     return " · ".join(subtitle_parts)
+
+
+def _normalize_advice_text(advice: str) -> str:
+    normalized = advice.strip()
+    normalized = re.sub(r"^建议[\s：:,-]*", "", normalized)
+    return normalized or advice.strip()
 
 
 async def send_notification(options: BarkOptions) -> bool:
@@ -244,6 +251,7 @@ async def send_trip_end(
         and driving_score is not None
         and driving_label is not None
     ):
+        lines.append("")
         lines.append(f"🏁 驾驶评分 {driving_score} 分 · {driving_label}")
         detail_line = f"急加速{hard_accel_count}次 · 急减速{hard_brake_count}次"
         if road_context:
@@ -263,7 +271,7 @@ async def send_trip_end(
         lines.append(f"🧠 分析 {analysis_summary}")
 
     if analysis_advice:
-        lines.append(f"💡 建议 {analysis_advice}")
+        lines.append(f"💡 {_normalize_advice_text(analysis_advice)}")
 
     return await send_notification(
         BarkOptions(
