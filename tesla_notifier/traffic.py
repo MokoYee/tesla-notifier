@@ -650,7 +650,7 @@ def _classify_traffic_label(
 def _build_traffic_summary_sentence(
     traffic_label: str,
     traffic_mix_pct: float,
-    sample_count: int,
+    _sample_count: int,
 ) -> str:
     """生成适合直接展示在通知里的路况摘要。"""
     if traffic_label == "高压拥堵":
@@ -663,12 +663,9 @@ def _build_traffic_summary_sentence(
         prefix = "沿途整体较为畅通"
 
     if traffic_mix_pct >= 1:
-        return (
-            f"{prefix}，缓行/拥堵占比约 {traffic_mix_pct:.0f}%，"
-            f"共采样 {sample_count} 次。"
-        )
+        return f"{prefix}，缓行/拥堵路段约占 {traffic_mix_pct:.0f}%"
 
-    return f"{prefix}，共采样 {sample_count} 次。"
+    return prefix
 
 
 def _haversine_km(

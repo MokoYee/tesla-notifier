@@ -150,7 +150,6 @@ async def _send_trip_notification(
         analysis_advice=score.advice if score else None,
         traffic_label=score.traffic_label if score else None,
         traffic_summary=score.traffic_summary if score else None,
-        traffic_sample_count=score.traffic_sample_count if score else None,
         speed_avg=trip.speed_avg,
         speed_max=trip.speed_max,
         odometer=trip.odometer,
@@ -657,10 +656,12 @@ async def handle_sentry_activated() -> None:
         # 获取位置（优先地址，失败则坐标）
         location = await mqtt_handler.get_location_str() if mqtt_handler else None
         battery_level = mqtt_handler.vehicle_state.battery_level if mqtt_handler else None
+        rated_range_km = mqtt_handler.vehicle_state.rated_range_km if mqtt_handler else None
 
         success = await bark.send_sentry_activated(
             location=location,
             battery_level=battery_level,
+            rated_range_km=rated_range_km,
             session_tag=_format_datetime_tag(
                 mqtt_handler.vehicle_state.sentry_activated_at if mqtt_handler else None
             ),
@@ -678,6 +679,8 @@ async def handle_sentry_activated() -> None:
 async def handle_sentry_deactivated(
     duration_min: float | None = None,
     battery_drop: int | None = None,
+    rated_range_km: float | None = None,
+    rated_range_drop_km: float | None = None,
     recording_count: int = 0,
 ) -> None:
     """处理哨兵模式关闭"""
@@ -692,7 +695,9 @@ async def handle_sentry_deactivated(
             location=location,
             duration_min=duration_min,
             battery_level=battery_level,
+            rated_range_km=rated_range_km,
             battery_drop=battery_drop,
+            rated_range_drop_km=rated_range_drop_km,
             recording_count=recording_count,
             session_tag=_current_local_token(),
         )

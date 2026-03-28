@@ -24,7 +24,7 @@ TIRE_LABELS = {
 
 AsyncCallback = Callable[[], Coroutine[Any, Any, None]]
 AsyncSentryDeactivatedCallback = Callable[
-    [float | None, int | None, int],
+    [float | None, int | None, float | None, float | None, int],
     Coroutine[Any, Any, None],
 ]
 AsyncPositionCallback = Callable[
@@ -42,6 +42,7 @@ class VehicleState:
     longitude: float | None = None
     geofence: str | None = None
     battery_level: int | None = None
+    rated_range_km: float | None = None
     charging_state: str | None = None
     charge_limit_soc: int | None = None
     charger_power: float | None = None
@@ -56,6 +57,7 @@ class VehicleState:
     sentry_mode: bool = False
     sentry_activated_at: datetime | None = None
     sentry_activated_battery_level: int | None = None
+    sentry_activated_rated_range_km: float | None = None
     sentry_recording_count: int = 0
     center_display_state: int | None = None
     center_display_state_initialized: bool = False
@@ -207,6 +209,8 @@ class MqttHandler:
             self.vehicle_state.geofence = payload or None
         elif topic_name == "battery_level":
             self._handle_battery_level(payload)
+        elif topic_name == "rated_battery_range_km":
+            self._handle_rated_range(payload)
         elif topic_name == "charge_limit_soc":
             self._handle_charge_limit_soc(payload)
         elif topic_name == "charger_power":
@@ -324,6 +328,9 @@ class MqttHandler:
                 self.vehicle_state.sentry_activated_battery_level = (
                     self.vehicle_state.battery_level
                 )
+                self.vehicle_state.sentry_activated_rated_range_km = (
+                    self.vehicle_state.rated_range_km
+                )
             return
 
         if not prev_sentry and current_sentry:
@@ -331,6 +338,9 @@ class MqttHandler:
             self.vehicle_state.sentry_activated_at = datetime.now()
             self.vehicle_state.sentry_activated_battery_level = (
                 self.vehicle_state.battery_level
+            )
+            self.vehicle_state.sentry_activated_rated_range_km = (
+                self.vehicle_state.rated_range_km
             )
             self.vehicle_state.sentry_recording_count = 0
             self.vehicle_state.last_sentry_event_time = None
@@ -354,7 +364,14 @@ class MqttHandler:
             if start_battery is not None and end_battery is not None:
                 battery_drop = max(start_battery - end_battery, 0)
 
+            rated_range_drop_km = None
+            start_rated_range_km = self.vehicle_state.sentry_activated_rated_range_km
+            end_rated_range_km = self.vehicle_state.rated_range_km
+            if start_rated_range_km is not None and end_rated_range_km is not None:
+                rated_range_drop_km = max(start_rated_range_km - end_rated_range_km, 0.0)
+
             self.vehicle_state.sentry_activated_battery_level = None
+            self.vehicle_state.sentry_activated_rated_range_km = None
             self.vehicle_state.sentry_recording_count = 0
             self.vehicle_state.last_sentry_event_time = None
 
@@ -362,6 +379,8 @@ class MqttHandler:
                 self._schedule_sentry_deactivated(
                     duration_min=duration_min,
                     battery_drop=battery_drop,
+                    rated_range_km=end_rated_range_km,
+                    rated_range_drop_km=rated_range_drop_km,
                     recording_count=recording_count,
                 )
 
@@ -406,6 +425,19 @@ class MqttHandler:
             self.vehicle_state.sentry_activated_battery_level = battery_level
 
         self._maybe_emit_charging_issue()
+
+    def _handle_rated_range(self, payload: str) -> None:
+        """处理表显续航更新。"""
+        rated_range_km = self._parse_float(payload)
+        if rated_range_km is None:
+            return
+
+        self.vehicle_state.rated_range_km = rated_range_km
+        if (
+            self.vehicle_state.sentry_mode
+            and self.vehicle_state.sentry_activated_rated_range_km is None
+        ):
+            self.vehicle_state.sentry_activated_rated_range_km = rated_range_km
 
     def _handle_charge_limit_soc(self, payload: str) -> None:
         """处理充电上限更新"""
@@ -600,6 +632,8 @@ class MqttHandler:
         self,
         duration_min: float | None,
         battery_drop: int | None,
+        rated_range_km: float | None,
+        rated_range_drop_km: float | None,
         recording_count: int,
     ) -> None:
         """将哨兵关闭事件安全切回主事件循环执行。"""
@@ -611,6 +645,8 @@ class MqttHandler:
             self.on_sentry_deactivated(
                 duration_min,
                 battery_drop,
+                rated_range_km,
+                rated_range_drop_km,
                 recording_count,
             ),
         )

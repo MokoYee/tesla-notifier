@@ -149,7 +149,7 @@ class DrivingScore:
     hard_brake_rate: float  # 每 100 km 急减速次数
     confidence: float  # 样本置信度，主要用于短途平滑
     analysis_summary: str  # 自动分析摘要
-    advice: str  # 自动建议
+    advice: str | None  # 行程提醒
     traffic_label: str | None = None  # 行程交通画像
     traffic_summary: str | None = None  # 行程交通摘要
     traffic_sample_count: int = 0  # 路况采样次数
@@ -989,18 +989,11 @@ def _build_driving_analysis(
     expected_brake_rate: float,
     confidence: float,
     traffic_summary: TrafficSummary | None,
-) -> tuple[str, str]:
-    """生成自动分析摘要与建议
+) -> tuple[str, str | None]:
+    """生成面向车主的行程表现与提醒
 
-    目标是把评分结果解释成“为什么是这个分数”，而不是只给一个数字。
+    目标是把评分结果翻译成用户能直接理解的话，而不是暴露系统分析口径。
     """
-    context_prefix = {
-        "城市通勤": "本次以城市通勤为主",
-        "高速巡航": "本次以高速巡航为主",
-        "综合路况": "本次路况较为综合",
-    }.get(context.road_context, "本次路况较为综合")
-    traffic_clause = _build_traffic_clause(traffic_summary)
-
     accel_ratio = hard_accel_rate / max(expected_accel_rate, 1.0)
     brake_ratio = hard_brake_rate / max(expected_brake_rate, 1.0)
 
@@ -1008,76 +1001,53 @@ def _build_driving_analysis(
     cautions: list[str] = []
 
     if accel_ratio <= 0.6:
-        positives.append("提速动作较克制")
+        positives.append("提速节奏比较克制")
     elif accel_ratio >= 1.35:
-        cautions.append("提速偏急")
+        cautions.append("起步和再提速有些偏急")
 
     if brake_ratio <= 0.7:
-        positives.append("制动预判较稳")
+        positives.append("制动预判比较稳")
     elif brake_ratio >= 1.2:
-        cautions.append("制动偏多")
+        cautions.append("减速收得稍晚")
 
     if context.overspeed_ratio >= 0.12:
         cautions.append("高速阶段车速偏快")
 
     if confidence < 0.35:
-        summary_parts = [context_prefix]
-        if traffic_clause:
-            summary_parts.append(traffic_clause)
-        summary = "，".join(summary_parts) + "，但行程较短，当前结果更适合作为趋势参考。"
-        return summary, "建议结合后续多次行程一起观察，避免对超短途过度解读。"
-
-    summary_parts = [context_prefix]
-    if traffic_clause:
-        summary_parts.append(traffic_clause)
+        summary = "这趟路程较短，分数波动会更明显，先把它当成一次状态提醒就好。"
+        return summary, "短途起停对分数影响更大，同路线多看几次会更接近真实状态。"
 
     if cautions:
         primary_issue = cautions[0]
-        summary = "，".join(summary_parts + [primary_issue]) + "。"
+        summary = f"这趟主要拉分点是{primary_issue}。"
+    elif len(positives) >= 2:
+        summary = "这趟提速和制动都比较平顺，整体状态不错。"
     elif positives:
-        summary = "，".join(summary_parts + [positives[0]]) + "，整体节奏较平顺。"
+        summary = f"这趟{positives[0]}，整体节奏比较平顺。"
     else:
-        summary = "，".join(summary_parts) + "，整体驾驶表现基本稳定。"
+        summary = "这趟整体驾驶状态比较稳定。"
 
-    if "制动偏多" in cautions:
+    if "减速收得稍晚" in cautions:
         if traffic_summary and traffic_summary.high_pressure_ratio >= 0.5:
-            advice = "本次拥堵路段较多，建议进一步拉开跟车距离，减少跟停带来的急刹。"
+            advice = "拥堵路段较多时，早点松电并多留一点跟车距离，会更从容。"
         else:
-            advice = "建议提前观察前车与路口变化，尽量更早松电并预留车距。"
-    elif "提速偏急" in cautions:
+            advice = "跟车或进路口时再早一点收电，体感和能耗都会更稳。"
+    elif "起步和再提速有些偏急" in cautions:
         if traffic_summary and traffic_summary.high_pressure_ratio >= 0.5:
-            advice = "拥堵路段频繁补电门收益有限，建议减少二次提速，节奏会更稳。"
+            advice = "拥堵时频繁补电门收益不高，起步更柔和一些会更顺。"
         else:
-            advice = "建议减少连续深踩电门，拉开提速节奏会更稳。"
+            advice = "起步和再加速别太急，分数和能耗通常都会更好看。"
     elif "高速阶段车速偏快" in cautions:
-        advice = "建议高速阶段更早收电控制车速，保持更稳定的巡航区间。"
+        advice = "高速阶段把巡航速度收一点，续航和安全余量都会更好。"
     elif (
         traffic_summary
         and traffic_summary.traffic_label in {"高压拥堵", "明显拥堵"}
     ):
-        advice = "本次外部路况压力较高，评分已按拥堵情况做缓冲，继续保持提前预判即可。"
-    elif context.road_context == "城市通勤":
-        advice = "城市路况波动较大，继续保持当前预判和跟车节奏即可。"
-    elif context.road_context == "高速巡航":
-        advice = "高速路况下保持均匀提速和稳定巡航，有助于长期维持高分。"
+        advice = "这趟外部路况本身就难开，能把节奏维持住已经不错。"
     else:
-        advice = "继续保持平顺提速和提前预判，分数会更稳定。"
+        advice = None
 
     return summary, advice
-
-
-def _build_traffic_clause(traffic_summary: TrafficSummary | None) -> str | None:
-    """把交通画像转成适合拼接到分析摘要中的短句。"""
-    if traffic_summary is None or traffic_summary.sample_count <= 0:
-        return None
-
-    return {
-        "高压拥堵": "沿途拥堵压力较高",
-        "明显拥堵": "沿途缓行较多",
-        "轻度拥堵": "沿途有轻度拥堵",
-        "整体畅通": "沿途整体较为畅通",
-    }.get(traffic_summary.traffic_label, None)
-
 
 # ========== 急加速/急减速检测算法 ==========
 # 急加速检测参数

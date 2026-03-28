@@ -129,6 +129,48 @@ def _normalize_advice_text(advice: str) -> str:
     return normalized or advice.strip()
 
 
+def _format_range_km(range_km: float | None) -> str | None:
+    """格式化表显续航。"""
+    if range_km is None:
+        return None
+    return f"{range_km:.0f} km"
+
+
+def _format_battery_with_range(
+    label: str,
+    battery_level: int | None,
+    rated_range_km: float | None,
+) -> str | None:
+    """拼接电量与表显续航。"""
+    battery_part = f"{battery_level}%" if battery_level is not None else None
+    range_part = _format_range_km(rated_range_km)
+
+    if battery_part and range_part:
+        return f"🔋 {label} {battery_part} · {range_part}"
+    if battery_part:
+        return f"🔋 {label} {battery_part}"
+    if range_part:
+        return f"🔋 {label} {range_part}"
+    return None
+
+
+def _format_sentry_consumption(
+    battery_drop: int | None,
+    rated_range_drop_km: float | None,
+) -> str | None:
+    """拼接哨兵期间的电量与续航消耗。"""
+    battery_part = f"{battery_drop}%" if battery_drop is not None else None
+    range_part = _format_range_km(rated_range_drop_km)
+
+    if battery_part and range_part:
+        return f"📉 本次消耗 {battery_part} · {range_part}"
+    if battery_part:
+        return f"📉 本次消耗 {battery_part}"
+    if range_part:
+        return f"📉 本次消耗 {range_part}"
+    return None
+
+
 def _normalize_event_part(part: object) -> str:
     """将事件 ID 片段规范化为稳定的短字符串。"""
     normalized = re.sub(r"[^a-z0-9]+", "-", str(part).strip().lower())
@@ -308,7 +350,6 @@ async def send_trip_end(
     analysis_advice: str | None = None,
     traffic_label: str | None = None,
     traffic_summary: str | None = None,
-    traffic_sample_count: int | None = None,
     speed_avg: float | None = None,
     speed_max: float | None = None,
     odometer: float | None = None,
@@ -371,25 +412,26 @@ async def send_trip_end(
     ):
         lines.append("")
         lines.append(f"🏁 驾驶评分 {driving_score} 分 · {driving_label}")
-        detail_line = f"急加速{hard_accel_count}次 · 急减速{hard_brake_count}次"
+        scene_parts = []
         if road_context:
-            detail_line = f"{road_context} · {detail_line}"
-        lines.append(f"🧭 {detail_line}")
+            scene_parts.append(road_context)
+        if traffic_label:
+            scene_parts.append(traffic_label)
+        if scene_parts:
+            lines.append(f"🧭 行驶场景 · {' · '.join(scene_parts)}")
+        lines.append(f"📌 驾驶动作 · 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次")
 
-    if traffic_label:
-        traffic_line = traffic_label
-        if traffic_sample_count:
-            traffic_line = f"{traffic_line} · 采样{traffic_sample_count}次"
-        lines.append(f"🚦 路况 · {traffic_line}")
+    elif traffic_label:
+        lines.append(f"🧭 行驶场景 · {traffic_label}")
 
     if traffic_summary:
-        lines.append(f"🗺️ 交通 · {traffic_summary}")
+        lines.append(f"🚦 沿途路况 · {traffic_summary}")
 
     if analysis_summary:
-        lines.append(f"🧠 分析 · {analysis_summary}")
+        lines.append(f"📈 本次表现 · {analysis_summary}")
 
     if analysis_advice:
-        lines.append(f"💡 建议 · {_normalize_advice_text(analysis_advice)}")
+        lines.append(f"💬 下次留意 · {_normalize_advice_text(analysis_advice)}")
 
     return await send_notification(
         BarkOptions(
@@ -639,6 +681,7 @@ async def send_daily_briefing(
 async def send_sentry_activated(
     location: str | None = None,
     battery_level: int | None = None,
+    rated_range_km: float | None = None,
     session_tag: str | None = None,
 ) -> bool:
     """发送哨兵模式激活推送"""
@@ -650,8 +693,9 @@ async def send_sentry_activated(
     if location:
         lines.append(f"📍 {location}")
 
-    if battery_level is not None:
-        lines.append(f"🔋 电量 {battery_level}%")
+    battery_line = _format_battery_with_range("电量", battery_level, rated_range_km)
+    if battery_line:
+        lines.append(battery_line)
 
     lines.extend([
         "",
@@ -681,7 +725,9 @@ async def send_sentry_deactivated(
     location: str | None = None,
     duration_min: float | None = None,
     battery_level: int | None = None,
+    rated_range_km: float | None = None,
     battery_drop: int | None = None,
+    rated_range_drop_km: float | None = None,
     recording_count: int = 0,
     session_tag: str | None = None,
 ) -> bool:
@@ -694,8 +740,9 @@ async def send_sentry_deactivated(
     if location:
         lines.append(f"📍 {location}")
 
-    if battery_level is not None:
-        lines.append(f"🔋 结束电量 {battery_level}%")
+    battery_line = _format_battery_with_range("结束电量", battery_level, rated_range_km)
+    if battery_line:
+        lines.append(battery_line)
 
     lines.extend([
         "",
@@ -703,15 +750,11 @@ async def send_sentry_deactivated(
     ])
 
     if duration_min is not None:
-        hours = int(duration_min // 60)
-        mins = int(duration_min % 60)
-        if hours > 0:
-            lines.append(f"⏱️ 运行时长 {hours}h {mins}min")
-        else:
-            lines.append(f"⏱️ 运行时长 {mins}min")
+        lines.append(f"⏱️ 运行时长 {_format_duration(duration_min)}")
 
-    if battery_drop is not None:
-        lines.append(f"📉 本次耗电 {battery_drop}%")
+    consumption_line = _format_sentry_consumption(battery_drop, rated_range_drop_km)
+    if consumption_line:
+        lines.append(consumption_line)
 
     if recording_count > 0:
         lines.append(f"🎥 触发录制 {recording_count} 次")
