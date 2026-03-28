@@ -24,6 +24,7 @@ TeslaMate 车辆状态推送插件，聚焦通知而不是重后台: 行程结�
 - **胎压异常提醒** - 基于 TeslaMate `tpms_soft_warning_*` 实时推送异常轮位和胎压
 - **充电异常提醒** - 检测 `NoPower` 或充电提前停止且未达到目标电量的情况
 - **行程路况分析** - 可选接入高德交通态势，低频采样后并入行程评分与分析文案
+- **通知可信度元数据** - 系统通知和日志会记录事件 ID、事件类型、优先级和触发依据，便于回溯与排障
 
 ### 定时报告（Cron 驱动）
 
@@ -79,7 +80,7 @@ docker-compose pull && docker-compose up -d
 
 ## 配置说明
 
-完整环境变量说明请参考 [docs/environment.md](docs/environment.md)，部署模板请参考 [`.env.example`](.env.example) 和 [docker-compose.yml](docker-compose.yml)。
+完整环境变量说明和通知可信度规则请参考 [docs/environment.md](docs/environment.md)，部署模板请参考 [`.env.example`](.env.example) 和 [docker-compose.yml](docker-compose.yml)。
 
 **必填配置：**
 - `BARK_KEY` - Bark 推送密钥
@@ -91,6 +92,8 @@ docker-compose pull && docker-compose up -d
 - `DEPARTURE_SAFETY_NOTIFY_ENABLED` - 开启离车安全提醒
 - `TPMS_NOTIFY_ENABLED` - 开启胎压异常提醒
 - `CHARGING_ISSUE_NOTIFY_ENABLED` - 开启充电异常提醒
+- `SYSTEM_HEALTH_NOTIFY_ENABLED` - 启动自检通知
+- `FAILURE_ALERT_NOTIFY_ENABLED` - 数据库 / MQTT 关键链路故障告警
 
 ## 天气服务
 

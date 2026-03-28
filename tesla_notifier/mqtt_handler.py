@@ -9,6 +9,7 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from tesla_notifier.config import config
+from tesla_notifier.health import failure_monitor
 from tesla_notifier.logger import setup_logger
 
 logger = setup_logger("mqtt")
@@ -99,6 +100,7 @@ class MqttHandler:
     client: mqtt.Client | None = None
     vehicle_state: VehicleState = field(default_factory=VehicleState)
     _loop: asyncio.AbstractEventLoop | None = None
+    _manual_disconnect: bool = False
 
     def connect(self) -> None:
         """连接 MQTT 服务器"""
@@ -106,6 +108,7 @@ class MqttHandler:
             return
 
         logger.info(f"正在连接 MQTT 服务器: {config.mqtt_url}")
+        self._manual_disconnect = False
 
         callback_api_version = getattr(mqtt, "CallbackAPIVersion", None)
         if callback_api_version is not None:
@@ -128,6 +131,7 @@ class MqttHandler:
             self.client.connect(config.mqtt_host, config.mqtt_port, keepalive=60)
             self.client.loop_start()
         except Exception as e:
+            failure_monitor.record_mqtt_disconnected(f"连接异常: {e}")
             logger.exception(f"MQTT 连接失败: {e}")
             self.client = None
 
@@ -135,6 +139,7 @@ class MqttHandler:
         """断开 MQTT 连接"""
         if self.client:
             logger.info("正在断开 MQTT 连接...")
+            self._manual_disconnect = True
             self.client.loop_stop()
             self.client.disconnect()
             self.client = None
@@ -150,11 +155,13 @@ class MqttHandler:
     ) -> None:
         """连接成功回调"""
         if reason_code == 0:
+            failure_monitor.record_mqtt_connected()
             logger.info("MQTT 连接成功")
             topic = f"teslamate/cars/{self.car_id}/#"
             client.subscribe(topic)
             logger.info(f"已订阅主题: {topic}")
         else:
+            failure_monitor.record_mqtt_disconnected(f"连接失败: {reason_code}")
             logger.error(f"MQTT 连接失败: {reason_code}")
 
     def _on_disconnect(
@@ -166,6 +173,11 @@ class MqttHandler:
         properties: Any | None,
     ) -> None:
         """断开连接回调"""
+        if self._manual_disconnect:
+            logger.info("MQTT 主动断开连接")
+            return
+
+        failure_monitor.record_mqtt_disconnected(f"reason_code={reason_code}")
         logger.warning(f"MQTT 连接断开: {reason_code}")
 
     def _on_message(

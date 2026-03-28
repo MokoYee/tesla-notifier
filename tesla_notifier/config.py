@@ -123,6 +123,26 @@ class Config:
         default_factory=lambda: int(os.getenv("CHARGING_STOPPED_MIN_SOC_GAP", "3"))
     )
 
+    # 系统健康通知
+    system_health_notify_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "SYSTEM_HEALTH_NOTIFY_ENABLED", "ON"
+        ).upper()
+        == "ON"
+    )
+    failure_alert_notify_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "FAILURE_ALERT_NOTIFY_ENABLED", "ON"
+        ).upper()
+        == "ON"
+    )
+    db_failure_alert_threshold: int = field(
+        default_factory=lambda: int(os.getenv("DB_FAILURE_ALERT_THRESHOLD", "3"))
+    )
+    mqtt_disconnect_alert_after: int = field(
+        default_factory=lambda: int(os.getenv("MQTT_DISCONNECT_ALERT_AFTER", "300"))
+    )
+
     # 日志级别（DEBUG/INFO/WARNING/ERROR）
     log_level: str = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").upper()
@@ -184,6 +204,12 @@ class Config:
 
         if self.trip_compensation_max_age_hours < 1:
             errors.append("TRIP_COMPENSATION_MAX_AGE_HOURS 必须大于等于 1")
+
+        if self.db_failure_alert_threshold < 1:
+            errors.append("DB_FAILURE_ALERT_THRESHOLD 必须大于等于 1")
+
+        if self.mqtt_disconnect_alert_after < 30:
+            errors.append("MQTT_DISCONNECT_ALERT_AFTER 建议不小于 30 秒")
 
         return errors
 

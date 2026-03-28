@@ -11,6 +11,7 @@ import psycopg
 from psycopg_pool import AsyncConnectionPool
 
 from tesla_notifier.config import config
+from tesla_notifier.health import failure_monitor
 from tesla_notifier.logger import setup_logger
 from tesla_notifier.traffic import TrafficSummary
 
@@ -210,12 +211,48 @@ async def get_connection() -> AsyncIterator[psycopg.AsyncConnection[Any]]:
     """
     global _pool
 
-    # 如果池未初始化，自动初始化（兼容旧代码）
+    # 只把“连接池初始化 / 获取连接失败”视为数据库链路异常，
+    # 避免把业务 SQL 错误误判成数据库可用性问题。
     if _pool is None:
-        await init_pool()
+        try:
+            await init_pool()
+        except Exception as e:
+            failure_monitor.record_db_failure(str(e))
+            raise
 
-    async with _pool.connection() as conn:  # type: ignore[union-attr]
-        yield conn
+    pool = _pool
+    if pool is None:
+        raise RuntimeError("数据库连接池初始化失败")
+
+    try:
+        conn = await pool.getconn()
+    except Exception as e:
+        failure_monitor.record_db_failure(str(e))
+        raise
+
+    failure_monitor.record_db_success()
+
+    try:
+        async with conn:
+            yield conn
+    finally:
+        try:
+            await pool.putconn(conn)
+        except Exception as e:
+            logger.warning(f"归还数据库连接失败: {e}")
+
+
+async def ping() -> bool:
+    """执行轻量数据库探活。"""
+    try:
+        async with get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT 1")
+                row = await cur.fetchone()
+                return bool(row and row[0] == 1)
+    except Exception as e:
+        logger.exception(f"数据库探活失败: {e}")
+        return False
 
 
 async def resolve_location_name(

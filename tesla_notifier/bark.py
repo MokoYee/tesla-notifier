@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from tesla_notifier.config import config
+from tesla_notifier.health import failure_monitor
 from tesla_notifier.logger import log_with_data, setup_logger
 
 logger = setup_logger("bark")
@@ -18,6 +19,36 @@ logger = setup_logger("bark")
 # 重试配置
 MAX_RETRIES = 3  # 最大重试次数
 RETRY_DELAY = 2  # 重试间隔（秒）
+
+NotificationCertainty = Literal["fact", "analysis", "system"]
+NotificationPriority = Literal["high", "medium", "low"]
+BarkLevel = Literal["active", "timeSensitive", "passive"]
+
+CERTAINTY_LABELS: dict[NotificationCertainty, str] = {
+    "fact": "事实事件",
+    "analysis": "分析结果",
+    "system": "系统状态",
+}
+PRIORITY_LABELS: dict[NotificationPriority, str] = {
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+}
+PRIORITY_TO_LEVEL: dict[NotificationPriority, BarkLevel] = {
+    "high": "timeSensitive",
+    "medium": "active",
+    "low": "passive",
+}
+
+
+@dataclass(frozen=True)
+class NotificationMeta:
+    """通知元数据。"""
+
+    event_id: str
+    certainty: NotificationCertainty
+    priority: NotificationPriority
+    reason: str | None = None
 
 
 @dataclass
@@ -32,12 +63,19 @@ class BarkOptions:
     group: str = "tesla"
     url: str | None = None
     badge: int | None = None
-    level: Literal["active", "timeSensitive", "passive"] = "active"
+    level: BarkLevel | None = None
+    meta: NotificationMeta | None = None
+    display_meta: bool = False
 
 
 def _current_local_time() -> str:
     """获取当前本地时间字符串"""
     return datetime.now(ZoneInfo(config.timezone)).strftime("%H:%M")
+
+
+def _current_local_token() -> str:
+    """获取当前本地时间令牌，用于生成事件 ID。"""
+    return datetime.now(ZoneInfo(config.timezone)).strftime("%Y%m%d%H%M%S")
 
 
 def _format_time(iso_string: str) -> str:
@@ -85,9 +123,77 @@ def _join_subtitle_parts(*parts: str | None) -> str | None:
 
 
 def _normalize_advice_text(advice: str) -> str:
+    """归一化建议文案，避免出现“建议 建议 ...”的重复表达。"""
     normalized = advice.strip()
     normalized = re.sub(r"^建议[\s：:,-]*", "", normalized)
     return normalized or advice.strip()
+
+
+def _normalize_event_part(part: object) -> str:
+    """将事件 ID 片段规范化为稳定的短字符串。"""
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(part).strip().lower())
+    return normalized.strip("-")
+
+
+def build_event_id(prefix: str, *parts: object) -> str:
+    """构造通知事件 ID。"""
+    filtered_parts: list[str] = []
+    for part in parts:
+        if part is None:
+            continue
+        normalized = _normalize_event_part(part)
+        if normalized:
+            filtered_parts.append(normalized)
+    if not filtered_parts:
+        filtered_parts.append(_current_local_token())
+    return "-".join([_normalize_event_part(prefix), *filtered_parts])
+
+
+def _resolve_notification_level(options: BarkOptions) -> BarkLevel:
+    """根据通知优先级推导 Bark level。"""
+    if options.level is not None:
+        return options.level
+    if options.meta is None:
+        return "active"
+    return PRIORITY_TO_LEVEL[options.meta.priority]
+
+
+def _append_meta_lines(lines: list[str], meta: NotificationMeta) -> None:
+    """在通知正文尾部追加元数据块。"""
+    lines.extend(
+        [
+            "",
+            "----",
+            f"类型 {CERTAINTY_LABELS[meta.certainty]}",
+            f"优先级 {PRIORITY_LABELS[meta.priority]}",
+            f"事件ID {meta.event_id}",
+        ]
+    )
+    if meta.reason:
+        lines.append(f"触发依据 {meta.reason}")
+
+
+def _compose_notification_body(options: BarkOptions) -> str:
+    """合并业务正文与通知元数据。"""
+    lines = options.body.splitlines()
+    if options.display_meta and options.meta is not None:
+        _append_meta_lines(lines, options.meta)
+    return _join_lines(lines)
+
+
+def _build_meta(
+    event_id: str,
+    certainty: NotificationCertainty,
+    priority: NotificationPriority,
+    reason: str | None,
+) -> NotificationMeta:
+    """构造统一通知元数据。"""
+    return NotificationMeta(
+        event_id=event_id,
+        certainty=certainty,
+        priority=priority,
+        reason=reason,
+    )
 
 
 async def send_notification(options: BarkOptions) -> bool:
@@ -100,13 +206,15 @@ async def send_notification(options: BarkOptions) -> bool:
         return False
 
     url = f"{config.bark_url}/{config.bark_key}"
+    body = _compose_notification_body(options)
+    level = _resolve_notification_level(options)
 
     payload: dict[str, object] = {
         "title": options.title,
-        "body": options.body,
+        "body": body,
         "sound": options.sound,
         "group": options.group,
-        "level": options.level,
+        "level": level,
     }
 
     if options.subtitle:
@@ -126,7 +234,9 @@ async def send_notification(options: BarkOptions) -> bool:
             "title": options.title,
             "subtitle": options.subtitle,
             "group": options.group,
-            "body_length": len(options.body),
+            "body_length": len(body),
+            "event_id": options.meta.event_id if options.meta else None,
+            "priority": options.meta.priority if options.meta else None,
         },
     )
     for attempt in range(1, MAX_RETRIES + 1):
@@ -135,6 +245,9 @@ async def send_notification(options: BarkOptions) -> bool:
                 response = await client.post(url, json=payload)
 
                 if response.status_code != 200:
+                    failure_monitor.record_bark_failure(
+                        f"HTTP {response.status_code}: {response.text[:200]}"
+                    )
                     log_with_data(
                         logger,
                         logging.ERROR,
@@ -146,14 +259,17 @@ async def send_notification(options: BarkOptions) -> bool:
                 result = response.json()
 
                 if result.get("code") == 200:
+                    failure_monitor.record_bark_success()
                     logger.info("推送成功")
                     return True
                 else:
+                    failure_monitor.record_bark_failure(str(result))
                     log_with_data(logger, logging.ERROR, "推送返回错误", result)
                     return False
 
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             # 网络相关异常，进行重试
+            failure_monitor.record_bark_failure(str(e))
             if attempt < MAX_RETRIES:
                 logger.warning(f"推送失败（第{attempt}次），{RETRY_DELAY}秒后重试: {e}")
                 await asyncio.sleep(RETRY_DELAY)
@@ -162,6 +278,7 @@ async def send_notification(options: BarkOptions) -> bool:
 
         except Exception as e:
             # 其他异常，不重试
+            failure_monitor.record_bark_failure(str(e))
             logger.exception(f"推送异常: {e}")
             return False
 
@@ -195,6 +312,7 @@ async def send_trip_end(
     speed_avg: float | None = None,
     speed_max: float | None = None,
     odometer: float | None = None,
+    trip_id: int | None = None,
 ) -> bool:
     """发送行程结束推送"""
     soc_diff = end_soc - start_soc
@@ -281,6 +399,15 @@ async def send_trip_end(
             group="tesla-trip",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id("trip-end", trip_id),
+                certainty="fact",
+                priority="medium",
+                reason=(
+                    "TeslaMate 已确认行程结束并完成数据库落盘；"
+                    "评分、建议与路况摘要属于附带分析结果"
+                ),
+            ),
         )
     )
 
@@ -298,6 +425,7 @@ async def send_charging_complete(
     end_range: float,
     outside_temp: float | None = None,
     cost: float | None = None,
+    charging_id: int | None = None,
 ) -> bool:
     """发送充电完成推送"""
     subtitle = _join_subtitle_parts(
@@ -328,6 +456,12 @@ async def send_charging_complete(
             group="tesla-charging",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id("charging-complete", charging_id),
+                certainty="fact",
+                priority="medium",
+                reason="TeslaMate charging_state 已结束且充电记录已写入数据库",
+            ),
         )
     )
 
@@ -342,6 +476,7 @@ async def send_weekly_report(
     total_energy_added: float = 0.0,
     avg_speed: float = 0.0,
     max_speed: float = 0.0,
+    period_tag: str | None = None,
 ) -> bool:
     """发送周报"""
     subtitle = _join_subtitle_parts(
@@ -394,6 +529,12 @@ async def send_weekly_report(
             group="tesla-weekly",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id("weekly-report", period_tag or _current_local_token()),
+                certainty="analysis",
+                priority="low",
+                reason="基于 TeslaMate 最近 7 天行程与充电数据聚合生成",
+            ),
         )
     )
 
@@ -403,6 +544,7 @@ async def send_monthly_report(
     total_distance: float,
     avg_efficiency: float,
     longest_trip: float,
+    period_tag: str | None = None,
 ) -> bool:
     """发送月报"""
     subtitle = _join_subtitle_parts(
@@ -424,6 +566,12 @@ async def send_monthly_report(
             group="tesla-monthly",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id("monthly-report", period_tag or _current_local_token()),
+                certainty="analysis",
+                priority="low",
+                reason="基于 TeslaMate 上个自然月数据聚合生成",
+            ),
         )
     )
 
@@ -439,6 +587,7 @@ async def send_daily_briefing(
     yesterday_distance: float | None = None,
     yesterday_efficiency: float | None = None,
     suggestion: str | None = None,
+    period_tag: str | None = None,
 ) -> bool:
     """发送每日简报"""
     from tesla_notifier.weather import get_weather_icon
@@ -477,6 +626,12 @@ async def send_daily_briefing(
             group="tesla-daily",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id("daily-briefing", period_tag or _current_local_token()),
+                certainty="analysis",
+                priority="low",
+                reason="天气数据与昨日驾驶汇总的组合分析结果",
+            ),
         )
     )
 
@@ -484,6 +639,7 @@ async def send_daily_briefing(
 async def send_sentry_activated(
     location: str | None = None,
     battery_level: int | None = None,
+    session_tag: str | None = None,
 ) -> bool:
     """发送哨兵模式激活推送"""
     subtitle = "离车守护中"
@@ -509,9 +665,14 @@ async def send_sentry_activated(
             subtitle=subtitle,
             body=_join_lines(lines),
             group="tesla-sentry",
-            level="timeSensitive",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id("sentry-activated", session_tag or _current_local_token()),
+                certainty="fact",
+                priority="medium",
+                reason="TeslaMate MQTT sentry_mode 状态切换为 true",
+            ),
         )
     )
 
@@ -522,6 +683,7 @@ async def send_sentry_deactivated(
     battery_level: int | None = None,
     battery_drop: int | None = None,
     recording_count: int = 0,
+    session_tag: str | None = None,
 ) -> bool:
     """发送哨兵模式关闭推送"""
     subtitle = "本次监控结束"
@@ -560,6 +722,15 @@ async def send_sentry_deactivated(
             subtitle=subtitle,
             body=_join_lines(lines),
             group="tesla-sentry",
+            meta=_build_meta(
+                event_id=build_event_id(
+                    "sentry-deactivated",
+                    session_tag or _current_local_token(),
+                ),
+                certainty="fact",
+                priority="medium",
+                reason="TeslaMate MQTT sentry_mode 状态切换为 false",
+            ),
         )
     )
 
@@ -568,6 +739,7 @@ async def send_sentry_recording(
     location: str | None = None,
     battery_level: int | None = None,
     recording_count: int = 0,
+    session_tag: str | None = None,
 ) -> bool:
     """发送哨兵录制事件推送
 
@@ -599,10 +771,19 @@ async def send_sentry_recording(
             subtitle=subtitle,
             body=_join_lines(lines),
             group="tesla-sentry",
-            level="timeSensitive",
             sound="minuet",  # 使用不同的提示音区分普通通知
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id(
+                    "sentry-recording",
+                    session_tag or _current_local_token(),
+                    recording_count or None,
+                ),
+                certainty="fact",
+                priority="high",
+                reason="TeslaMate MQTT center_display_state=7，表示哨兵录制已触发",
+            ),
         )
     )
 
@@ -611,6 +792,7 @@ async def send_departure_safety_alert(
     issues: list[str],
     location: str | None = None,
     battery_level: int | None = None,
+    session_tag: str | None = None,
 ) -> bool:
     """发送离车安全提醒"""
     if len(issues) <= 2:
@@ -644,9 +826,18 @@ async def send_departure_safety_alert(
             subtitle=subtitle,
             body=_join_lines(lines),
             group="tesla-safety",
-            level="timeSensitive",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id(
+                    "departure-safety",
+                    session_tag or _current_local_token(),
+                    len(issues),
+                ),
+                certainty="analysis",
+                priority="high",
+                reason="离车延迟校验后，门窗/锁车/充电口等状态组合规则命中风险",
+            ),
         )
     )
 
@@ -655,6 +846,7 @@ async def send_tire_pressure_alert(
     warning_wheels: list[str],
     pressures: dict[str, float | None],
     location: str | None = None,
+    session_tag: str | None = None,
 ) -> bool:
     """发送胎压异常提醒"""
     if len(warning_wheels) == 1:
@@ -691,9 +883,18 @@ async def send_tire_pressure_alert(
             subtitle=subtitle,
             body=_join_lines(lines),
             group="tesla-tpms",
-            level="timeSensitive",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id(
+                    "tpms-alert",
+                    session_tag or _current_local_token(),
+                    len(warning_wheels),
+                ),
+                certainty="fact",
+                priority="high",
+                reason="TeslaMate MQTT tpms_soft_warning_* 实时告警为 true",
+            ),
         )
     )
 
@@ -705,6 +906,7 @@ async def send_charging_issue_alert(
     charge_limit_soc: int | None = None,
     charger_power: float | None = None,
     plugged_in: bool | None = None,
+    session_tag: str | None = None,
 ) -> bool:
     """发送充电异常提醒"""
     if issue_type == "no_power":
@@ -750,8 +952,48 @@ async def send_charging_issue_alert(
             subtitle=subtitle,
             body=_join_lines(lines),
             group="tesla-charging",
-            level="timeSensitive",
             icon=config.bark_icon,
             badge=1,
+            meta=_build_meta(
+                event_id=build_event_id(
+                    "charging-issue",
+                    issue_type,
+                    session_tag or _current_local_token(),
+                ),
+                certainty="fact",
+                priority="high",
+                reason=(
+                    "TeslaMate MQTT charging_state 命中异常状态，"
+                    "例如 NoPower 或 Stopped 且 SoC 未达到目标"
+                ),
+            ),
+        )
+    )
+
+
+async def send_system_status(
+    title: str,
+    subtitle: str | None,
+    lines: list[str],
+    event_id: str,
+    priority: NotificationPriority,
+    reason: str,
+) -> bool:
+    """发送系统状态类通知。"""
+    return await send_notification(
+        BarkOptions(
+            title=title,
+            subtitle=subtitle,
+            body=_join_lines(lines),
+            group="tesla-system",
+            icon=config.bark_icon,
+            badge=1,
+            display_meta=True,
+            meta=_build_meta(
+                event_id=event_id,
+                certainty="system",
+                priority=priority,
+                reason=reason,
+            ),
         )
     )

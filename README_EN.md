@@ -25,6 +25,7 @@ TeslaMate notification companion focused on pushes instead of a heavy backend: g
 - **Tire Pressure Alert** - Realtime tire pressure warning based on TeslaMate `tpms_soft_warning_*`
 - **Charging Issue Alert** - Detects `NoPower` or charging stopped early before reaching the target SoC
 - **Traffic-aware Trip Analysis** - Optional Amap traffic sampling during a drive, merged into trip scoring and narrative analysis
+- **Notification Trust Metadata** - System notifications and logs include event IDs, event type, priority, and trigger reasons for easier troubleshooting
 
 ### Scheduled Reports (Cron-driven)
 
@@ -79,7 +80,7 @@ docker-compose pull && docker-compose up -d
 
 ## Configuration
 
-See [docs/environment.md](docs/environment.md) for the full environment variable reference, and use [`.env.example`](.env.example) or [docker-compose.yml](docker-compose.yml) as deployment templates.
+See [docs/environment.md](docs/environment.md) for the full environment variable reference and notification trust rules, and use [`.env.example`](.env.example) or [docker-compose.yml](docker-compose.yml) as deployment templates.
 
 **Required:**
 - `BARK_KEY` - Bark push notification key
@@ -91,6 +92,8 @@ See [docs/environment.md](docs/environment.md) for the full environment variable
 - `DEPARTURE_SAFETY_NOTIFY_ENABLED` - Enable departure safety alerts
 - `TPMS_NOTIFY_ENABLED` - Enable tire pressure alerts
 - `CHARGING_ISSUE_NOTIFY_ENABLED` - Enable charging issue alerts
+- `SYSTEM_HEALTH_NOTIFY_ENABLED` - Enable startup self-check notifications
+- `FAILURE_ALERT_NOTIFY_ENABLED` - Enable database / MQTT critical path failure alerts
 
 ## Weather Services
 

@@ -6,6 +6,7 @@ import signal
 import sys
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -14,6 +15,7 @@ load_dotenv()
 
 from tesla_notifier import bark, database
 from tesla_notifier.config import config
+from tesla_notifier.health import SystemAlert, failure_monitor
 from tesla_notifier.logger import setup_logger
 from tesla_notifier.mqtt_handler import MqttHandler
 from tesla_notifier.scheduler import Scheduler
@@ -152,6 +154,7 @@ async def _send_trip_notification(
         speed_avg=trip.speed_avg,
         speed_max=trip.speed_max,
         odometer=trip.odometer,
+        trip_id=trip.id,
     )
 
     if success:
@@ -209,6 +212,153 @@ async def run_trip_compensation_worker() -> None:
     except asyncio.CancelledError:
         logger.info("行程补偿巡检任务已停止")
         raise
+
+
+def _current_local_time() -> str:
+    """返回当前本地时间。"""
+    return datetime.now(ZoneInfo(config.timezone)).strftime("%H:%M")
+
+
+def _current_local_token() -> str:
+    """返回当前本地时间令牌。"""
+    return datetime.now(ZoneInfo(config.timezone)).strftime("%Y%m%d%H%M%S")
+
+
+def _current_date_tag() -> str:
+    """返回当前本地日期标签。"""
+    return datetime.now(ZoneInfo(config.timezone)).strftime("%Y%m%d")
+
+
+def _current_month_tag() -> str:
+    """返回当前本地月份标签。"""
+    return datetime.now(ZoneInfo(config.timezone)).strftime("%Y%m")
+
+
+def _format_datetime_tag(value: datetime | None) -> str | None:
+    """将 datetime 转成稳定标签。"""
+    if value is None:
+        return None
+    return value.strftime("%Y%m%d%H%M%S")
+
+
+def _get_enabled_feature_labels() -> list[str]:
+    """汇总当前已启用的用户能力。"""
+    labels: list[str] = []
+
+    if config.mqtt_enabled:
+        labels.append("实时事件")
+    if config.cron_enabled:
+        labels.append("日报周报月报")
+    if config.sentry_notify_enabled:
+        labels.append("哨兵事件")
+    if config.departure_safety_notify_enabled:
+        labels.append("离车安全")
+    if config.tpms_notify_enabled:
+        labels.append("胎压提醒")
+    if config.charging_issue_notify_enabled:
+        labels.append("充电异常")
+    if config.traffic_analysis_enabled and config.amap_key:
+        labels.append("路况增强")
+
+    return labels
+
+
+def _mqtt_connection_status() -> str:
+    """返回 MQTT 连接状态文本。"""
+    if not config.mqtt_enabled:
+        return "未启用"
+    if mqtt_handler and mqtt_handler.client and mqtt_handler.client.is_connected():
+        return "已连接"
+    return "未连接"
+
+
+async def handle_system_alert(alert: SystemAlert) -> None:
+    """统一处理系统链路告警。"""
+    title = "⚠️ 系统告警" if alert.status == "alert" else "✅ 系统恢复"
+    lines = [
+        f"🕐 {_current_local_time()}",
+        f"🔧 组件 {alert.component}",
+    ]
+
+    if alert.details:
+        lines.append("")
+        lines.extend([f"• {detail}" for detail in alert.details])
+
+    success = await bark.send_system_status(
+        title=title,
+        subtitle=alert.summary,
+        lines=lines,
+        event_id=bark.build_event_id("system", alert.event_key, _current_local_token()),
+        priority=alert.severity,
+        reason=alert.reason,
+    )
+
+    if success:
+        logger.info(f"系统通知发送成功: {alert.summary}")
+    else:
+        logger.error(f"系统通知发送失败: {alert.summary}")
+
+
+async def notify_startup_db_init_failure(error: Exception) -> None:
+    """按统一开关语义处理启动期数据库初始化失败告警。"""
+    if not config.failure_alert_notify_enabled:
+        logger.warning("数据库初始化失败，但 FAILURE_ALERT_NOTIFY_ENABLED 已关闭")
+        return
+
+    await handle_system_alert(
+        SystemAlert(
+            component="database",
+            status="alert",
+            severity="high",
+            summary="数据库初始化失败",
+            reason="应用启动阶段无法建立数据库连接",
+            details=(f"错误详情 {error}",),
+            event_key="database-init-failure",
+        )
+    )
+
+
+async def send_startup_health_check() -> None:
+    """启动完成后发送一次系统自检。"""
+    if not config.system_health_notify_enabled:
+        return
+
+    if config.mqtt_enabled:
+        await asyncio.sleep(3)
+
+    db_ok = await database.ping()
+    mqtt_status = _mqtt_connection_status()
+    core_ready = db_ok and (not config.mqtt_enabled or mqtt_status == "已连接")
+    enabled_features = "、".join(_get_enabled_feature_labels()) or "基础推送"
+    traffic_status = "已开启" if config.traffic_analysis_enabled and config.amap_key else "未开启"
+
+    lines = [
+        f"🕐 {_current_local_time()}",
+        "",
+        "【链路】",
+        "• Bark 已配置",
+        f"• 数据库 {'正常' if db_ok else '异常'}",
+        f"• MQTT {mqtt_status}",
+        "",
+        "【能力】",
+        f"• 已启用 {enabled_features}",
+        f"• 高德地址 {'已配置' if config.amap_key else '未配置'}",
+        f"• 路况增强 {traffic_status}",
+    ]
+
+    success = await bark.send_system_status(
+        title="🩺 启动自检",
+        subtitle="核心链路正常" if core_ready else "存在待关注项",
+        lines=lines,
+        event_id=bark.build_event_id("health-startup", _current_local_token()),
+        priority="medium" if core_ready else "high",
+        reason="应用启动完成后的链路自检结果",
+    )
+
+    if success:
+        logger.info("启动自检推送成功")
+    else:
+        logger.error("启动自检推送失败")
 
 
 async def handle_trip_end() -> None:
@@ -351,6 +501,7 @@ async def handle_charging_complete() -> None:
                 start_range=charging.start_rated_range_km,
                 end_range=charging.end_rated_range_km,
                 outside_temp=charging.outside_temp_avg,
+                charging_id=charging.id,
             )
 
             if success:
@@ -415,6 +566,7 @@ async def send_daily_briefing_task() -> None:
             yesterday_distance=yesterday.total_distance if yesterday else None,
             yesterday_efficiency=yesterday.avg_efficiency if yesterday else None,
             suggestion=suggestion,
+            period_tag=_current_date_tag(),
         )
 
         if success:
@@ -451,6 +603,7 @@ async def send_weekly_report_task() -> None:
             total_energy_added=summary.total_energy_added,
             avg_speed=summary.avg_speed,
             max_speed=summary.max_speed,
+            period_tag=_current_date_tag(),
         )
 
         if success:
@@ -482,6 +635,7 @@ async def send_monthly_report_task() -> None:
             total_distance=summary.total_distance,
             avg_efficiency=summary.avg_efficiency,
             longest_trip=summary.longest_trip,
+            period_tag=_current_month_tag(),
         )
 
         if success:
@@ -507,6 +661,9 @@ async def handle_sentry_activated() -> None:
         success = await bark.send_sentry_activated(
             location=location,
             battery_level=battery_level,
+            session_tag=_format_datetime_tag(
+                mqtt_handler.vehicle_state.sentry_activated_at if mqtt_handler else None
+            ),
         )
 
         if success:
@@ -537,6 +694,7 @@ async def handle_sentry_deactivated(
             battery_level=battery_level,
             battery_drop=battery_drop,
             recording_count=recording_count,
+            session_tag=_current_local_token(),
         )
 
         if success:
@@ -567,6 +725,9 @@ async def handle_sentry_recording() -> None:
             location=location,
             battery_level=battery_level,
             recording_count=recording_count,
+            session_tag=_format_datetime_tag(
+                mqtt_handler.vehicle_state.last_sentry_event_time if mqtt_handler else None
+            ),
         )
 
         if success:
@@ -598,6 +759,7 @@ async def handle_departure_safety_alert() -> None:
             issues=issues,
             location=location,
             battery_level=battery_level,
+            session_tag=str(mqtt_handler.vehicle_state.departure_check_session_id),
         )
 
         if success:
@@ -628,6 +790,7 @@ async def handle_tire_pressure_alert() -> None:
             warning_wheels=warning_wheels,
             pressures=pressures,
             location=location,
+            session_tag=_current_local_token(),
         )
 
         if success:
@@ -662,6 +825,7 @@ async def handle_charging_issue_alert() -> None:
             charge_limit_soc=state.charge_limit_soc,
             charger_power=state.charger_power,
             plugged_in=state.plugged_in,
+            session_tag=_format_datetime_tag(state.last_charging_issue_time),
         )
 
         if success:
@@ -751,12 +915,32 @@ async def run() -> None:
             "  CHARGING_STOPPED_MIN_SOC_GAP: "
             f"{config.charging_stopped_min_soc_gap}%"
         )
-
-    # 初始化数据库连接池
-    await database.init_pool()
-    _trip_processing_lock = asyncio.Lock()
+    logger.debug(
+        "  SYSTEM_HEALTH_NOTIFY_ENABLED: "
+        f"{'(已开启)' if config.system_health_notify_enabled else '(已关闭)'}"
+    )
+    logger.debug(
+        "  FAILURE_ALERT_NOTIFY_ENABLED: "
+        f"{'(已开启)' if config.failure_alert_notify_enabled else '(已关闭)'}"
+    )
+    logger.debug(
+        f"  DB_FAILURE_ALERT_THRESHOLD: {config.db_failure_alert_threshold}"
+    )
+    logger.debug(
+        f"  MQTT_DISCONNECT_ALERT_AFTER: {config.mqtt_disconnect_alert_after}s"
+    )
 
     loop = asyncio.get_event_loop()
+    failure_monitor.configure(loop, handle_system_alert)
+    failure_monitor.start()
+
+    # 初始化数据库连接池
+    try:
+        await database.init_pool()
+    except Exception as e:
+        logger.exception(f"数据库初始化失败: {e}")
+        await notify_startup_db_init_failure(e)
+        raise
 
     # 启动 MQTT
     if config.mqtt_enabled:
@@ -779,10 +963,10 @@ async def run() -> None:
         )
         mqtt_handler.set_event_loop(loop)
         mqtt_handler.connect()
+        trip_compensation_task = asyncio.create_task(run_trip_compensation_worker())
     else:
         logger.warning("MQTT 订阅未启用 (设置 ENABLE_MQTT=true 启用)")
-
-    trip_compensation_task = asyncio.create_task(run_trip_compensation_worker())
+        trip_compensation_task = None
 
     # 启动定时任务
     if config.cron_enabled:
@@ -795,6 +979,7 @@ async def run() -> None:
     else:
         logger.warning("定时任务未启用 (设置 ENABLE_CRON=true 启用)")
 
+    asyncio.create_task(send_startup_health_check())
     logger.info("========== Tesla Notifier 启动完成 ==========")
 
     # 初始化退出事件
@@ -830,6 +1015,11 @@ async def cleanup() -> None:
         with suppress(asyncio.CancelledError):
             await trip_compensation_task
         trip_compensation_task = None
+
+    try:
+        await failure_monitor.shutdown()
+    except Exception as e:
+        logger.error(f"停止健康监控失败: {e}")
 
     # 断开 MQTT 连接
     if mqtt_handler:
