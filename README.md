@@ -35,65 +35,97 @@ TeslaMate 车辆状态推送插件，聚焦通知而不是重后台: 行程结�
 
 ## 快速开始
 
-### 方式一：独立部署
+推荐把 `tesla-notifier` 作为一个独立容器部署在 TeslaMate 所在的 Docker 网络中。默认情况下，你通常只需要修改 `.env`，不需要改 `docker-compose.yml`。
 
-1. 下载 `docker-compose.yml` 到 TeslaMate 同级目录：
+### 1. 下载模板文件
 
 ```bash
 curl -O https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.example
 ```
 
-2. 编辑 `docker-compose.yml`，修改 `BARK_KEY` 等必要配置；如需更准确地址和路况分析，再补 `AMAP_KEY`（详见文件内注释）
+### 2. 编辑 `.env`
 
-3. 启动服务：
+至少修改：
 
-```bash
-docker-compose up -d
-```
+- `BARK_KEY`
+- `DB_PASSWORD`（如果你的 TeslaMate 数据库不是默认密码）
 
-### 方式二：合并到 TeslaMate
+默认模板已经适配 TeslaMate 标准服务名：
 
-在 TeslaMate 的 `docker-compose.yml` 中添加以下服务：
+- `DB_HOST=database`
+- `MQTT_URL=mqtt://mosquitto:1883`
+
+如果你的 TeslaMate 服务名或端口不同，再按实际环境修改。
+
+### 3. 如有需要，调整 Docker 网络名
+
+仓库里的 `docker-compose.yml` 默认使用外部网络 `teslamate_default`。  
+如果你的 TeslaMate 实际网络名不是这个，只需要改这一处：
 
 ```yaml
-services:
-  # ... 其他 TeslaMate 服务 ...
-
-  tesla-notifier:
-    image: mokoyee/tesla-notifier:latest
-    container_name: tesla-notifier
-    restart: unless-stopped
-    environment:
-      - ENABLE_MQTT=true
-      - ENABLE_CRON=true
-      - BARK_KEY=your_bark_key  # 必填：替换为你的 Bark Key
-      # 更多配置项参考：https://github.com/MokoYee/tesla-notifier
+networks:
+  teslamate_default:
+    external: true
 ```
 
-> 合并部署时无需配置数据库和 MQTT 地址，默认值已适配 TeslaMate 标准配置。
-
-### 更新镜像
+### 4. 启动服务
 
 ```bash
-docker-compose pull && docker-compose up -d
+docker compose up -d
+```
+
+### 5. 更新镜像
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+## 快速配置示例
+
+下面是一份最常见、最容易直接用的 `.env` 示例：
+
+```bash
+BARK_KEY=your_bark_key
+
+DB_HOST=database
+DB_PORT=5432
+DB_NAME=teslamate
+DB_USER=teslamate
+DB_PASSWORD=teslamate
+
+ENABLE_MQTT=true
+MQTT_URL=mqtt://mosquitto:1883
+
+ENABLE_CRON=true
+DAILY_CRON=0 8 * * *
+WEEKLY_CRON=0 9 * * mon
+MONTHLY_CRON=0 9 1 * *
+
+CAR_ID=1
+TZ=Asia/Shanghai
 ```
 
 ## 配置说明
 
-完整环境变量说明和通知可信度规则请参考 [docs/environment.md](docs/environment.md)，部署模板请参考 [`.env.example`](.env.example) 和 [docker-compose.yml](docker-compose.yml)。
+完整环境变量说明请参考 [docs/environment.md](docs/environment.md)。
 
-**必填配置：**
-- `BARK_KEY` - Bark 推送密钥
+常用配置：
 
-**可选配置：**
-- `CAIYUN_TOKEN` - 彩云天气 Token，提供更详细的天气信息
-- `AMAP_KEY` - 高德地图 Key，提供更精确的中文地址
-- `TRAFFIC_ANALYSIS_ENABLED` - 开启行程中路况低频采样与评分修正
-- `DEPARTURE_SAFETY_NOTIFY_ENABLED` - 开启离车安全提醒
-- `TPMS_NOTIFY_ENABLED` - 开启胎压异常提醒
-- `CHARGING_ISSUE_NOTIFY_ENABLED` - 开启充电异常提醒
-- `SYSTEM_HEALTH_NOTIFY_ENABLED` - 启动自检通知
-- `FAILURE_ALERT_NOTIFY_ENABLED` - 数据库 / MQTT 关键链路故障告警
+- `BARK_KEY`：必填，Bark 推送密钥
+- `CAIYUN_TOKEN`：可选，补充更详细的天气信息
+- `AMAP_KEY`：可选，补充更准确的中文地址
+- `SENTRY_NOTIFY_ENABLED`：可选，开启哨兵事件提醒
+- `DEPARTURE_SAFETY_NOTIFY_ENABLED`：可选，开启离车安全提醒
+- `TPMS_NOTIFY_ENABLED`：可选，开启胎压异常提醒
+- `CHARGING_ISSUE_NOTIFY_ENABLED`：可选，开启充电异常提醒
+- `TRAFFIC_ANALYSIS_ENABLED`：可选，开启行程路况增强分析
+
+默认已启用但通常无需显式配置：
+
+- 弱网行程补偿
+- 系统健康通知
+- `./data` 下的推送状态持久化
 
 ## 天气服务
 

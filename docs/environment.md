@@ -71,6 +71,14 @@
 | `STATE_FILE` | `./data/state.json` | 否 | 已推送记录持久化文件路径 |
 | `LOG_LEVEL` | `INFO` | 否 | 日志级别，支持 `DEBUG`、`INFO`、`WARNING`、`ERROR` |
 
+## 弱网行程补偿
+
+| 变量 | 默认值 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `TRIP_COMPENSATION_INTERVAL` | `300` | 否 | 后台巡检最近未推送行程的周期，单位秒 |
+| `TRIP_OFFLINE_RECONCILE_DELAY` | `960` | 否 | 驾驶中若 MQTT 状态变为 `offline`，延迟多久执行一次离线补偿检查，单位秒 |
+| `TRIP_COMPENSATION_MAX_AGE_HOURS` | `24` | 否 | 只补最近多少小时内结束的行程，避免把过久以前的旧行程重新推送 |
+
 ## 实时告警开关
 
 | 变量 | 默认值 | 必填 | 说明 |
@@ -144,7 +152,6 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 
 ## 说明
 
-- 当前哨兵逻辑不再依赖任何“功率阈值”配置。
 - 哨兵录制事件基于 TeslaMate MQTT 实时状态判断，并使用 `SENTRY_RECORDING_COOLDOWN` 防重复推送。
 - 如果你只想用实时通知，可以保留 `ENABLE_MQTT=true`，并按需关闭 `ENABLE_CRON`。
 - 行程路况分析使用本地 JSON 缓存，不会额外引入数据库；缓存目录默认为 `./data/traffic_snapshots/`。

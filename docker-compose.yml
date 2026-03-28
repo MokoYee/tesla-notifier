@@ -1,75 +1,15 @@
 services:
   tesla-notifier:
     image: mokoyee/tesla-notifier:latest
-    # 发布锁版本时可改为具体 tag，例如：
-    # image: mokoyee/tesla-notifier:v1.1.0
     container_name: tesla-notifier
     restart: unless-stopped
+    env_file:
+      - .env
     volumes:
-      - tesla-notifier-data:/app/data
-    environment:
-      # 数据库配置（连接 TeslaMate 数据库）
-      - DB_HOST=database
-      - DB_PORT=5432
-      - DB_NAME=teslamate
-      - DB_USER=teslamate
-      - DB_PASSWORD=teslamate
-
-      # MQTT 配置
-      - ENABLE_MQTT=true
-      - MQTT_URL=mqtt://mosquitto:1883
-      # - MQTT_USERNAME=
-      # - MQTT_PASSWORD=
-
-      # 定时任务配置
-      - ENABLE_CRON=true
-      - DAILY_CRON=0 8 * * *
-      - WEEKLY_CRON=0 9 * * mon     
-      - MONTHLY_CRON=0 9 1 * *
-
-      # Bark 推送配置
-      - BARK_URL=https://api.day.app
-      - BARK_KEY=your_bark_key
-
-      # 第三方服务（可选）
-      # - CAIYUN_TOKEN=your_caiyun_token
-      # - AMAP_KEY=your_amap_key
-
-      # 行程路况分析（可选，依赖高德交通态势高级接口）
-      # - TRAFFIC_ANALYSIS_ENABLED=ON
-      # - TRAFFIC_SAMPLE_INTERVAL=300
-      # - TRAFFIC_SAMPLE_MIN_DISTANCE_KM=3
-      # - TRAFFIC_QUERY_RADIUS=1000
-
-      # 哨兵录制提醒（可选）
-      # - SENTRY_NOTIFY_ENABLED=ON
-      # - SENTRY_RECORDING_COOLDOWN=300
-
-      # 离车安全提醒（可选）
-      # - DEPARTURE_SAFETY_NOTIFY_ENABLED=ON
-      # - DEPARTURE_SAFETY_DELAY=45
-
-      # 胎压异常提醒（可选）
-      # - TPMS_NOTIFY_ENABLED=ON
-      # - TPMS_NOTIFY_COOLDOWN=1800
-
-      # 充电异常提醒（可选）
-      # - CHARGING_ISSUE_NOTIFY_ENABLED=ON
-      # - CHARGING_ISSUE_COOLDOWN=900
-      # - CHARGING_STOPPED_MIN_SOC_GAP=3
-
-      # 车辆配置
-      - CAR_ID=1
-      - MIN_TRIP_DISTANCE=1
-
-      # 时区
-      - TZ=Asia/Shanghai
+      - ./data:/app/data
     networks:
       - teslamate_default
 
 networks:
   teslamate_default:
     external: true
-
-volumes:
-  tesla-notifier-data:

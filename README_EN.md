@@ -35,65 +35,95 @@ TeslaMate notification companion focused on pushes instead of a heavy backend: g
 
 ## Quick Start
 
-### Option 1: Standalone Deployment
+The recommended setup is a standalone `tesla-notifier` container attached to the same Docker network as TeslaMate. In most cases, you only need to edit `.env`, not `docker-compose.yml`.
 
-1. Download `docker-compose.yml` to the same directory as TeslaMate:
+### 1. Download the templates
 
 ```bash
 curl -O https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.example
 ```
 
-2. Edit `docker-compose.yml` and configure `BARK_KEY`; add `AMAP_KEY` only if you want better addresses and traffic-aware trip analysis
+### 2. Edit `.env`
 
-3. Start the service:
+At minimum, set:
 
-```bash
-docker-compose up -d
-```
+- `BARK_KEY`
+- `DB_PASSWORD` if your TeslaMate database password is not the default
 
-### Option 2: Merge with TeslaMate
+The default template already matches a standard TeslaMate stack:
 
-Add the following service to your TeslaMate `docker-compose.yml`:
+- `DB_HOST=database`
+- `MQTT_URL=mqtt://mosquitto:1883`
+
+Only change them if your TeslaMate service names or ports are different.
+
+### 3. Adjust the Docker network name if needed
+
+The repository template uses the external network `teslamate_default` by default.  
+If your TeslaMate network has a different name, change this block once:
 
 ```yaml
-services:
-  # ... other TeslaMate services ...
-
-  tesla-notifier:
-    image: mokoyee/tesla-notifier:latest
-    container_name: tesla-notifier
-    restart: unless-stopped
-    environment:
-      - ENABLE_MQTT=true
-      - ENABLE_CRON=true
-      - BARK_KEY=your_bark_key  # Required: Replace with your Bark Key
-      # More options: https://github.com/MokoYee/tesla-notifier
+networks:
+  teslamate_default:
+    external: true
 ```
 
-> When merging, no need to configure database or MQTT addresses - defaults are compatible with standard TeslaMate setup.
-
-### Update Image
+### 4. Start the service
 
 ```bash
-docker-compose pull && docker-compose up -d
+docker compose up -d
+```
+
+### 5. Update the image
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+## Quick `.env` Example
+
+```bash
+BARK_KEY=your_bark_key
+
+DB_HOST=database
+DB_PORT=5432
+DB_NAME=teslamate
+DB_USER=teslamate
+DB_PASSWORD=teslamate
+
+ENABLE_MQTT=true
+MQTT_URL=mqtt://mosquitto:1883
+
+ENABLE_CRON=true
+DAILY_CRON=0 8 * * *
+WEEKLY_CRON=0 9 * * mon
+MONTHLY_CRON=0 9 1 * *
+
+CAR_ID=1
+TZ=Asia/Shanghai
 ```
 
 ## Configuration
 
-See [docs/environment.md](docs/environment.md) for the full environment variable reference and notification trust rules, and use [`.env.example`](.env.example) or [docker-compose.yml](docker-compose.yml) as deployment templates.
+See [docs/environment.md](docs/environment.md) for the full environment variable reference.
 
-**Required:**
-- `BARK_KEY` - Bark push notification key
+Common options:
 
-**Optional:**
-- `CAIYUN_TOKEN` - Caiyun Weather token for detailed weather info (China)
-- `AMAP_KEY` - Amap (Gaode) key for accurate Chinese addresses
-- `TRAFFIC_ANALYSIS_ENABLED` - Enable low-frequency traffic sampling during trips
-- `DEPARTURE_SAFETY_NOTIFY_ENABLED` - Enable departure safety alerts
-- `TPMS_NOTIFY_ENABLED` - Enable tire pressure alerts
-- `CHARGING_ISSUE_NOTIFY_ENABLED` - Enable charging issue alerts
-- `SYSTEM_HEALTH_NOTIFY_ENABLED` - Enable startup self-check notifications
-- `FAILURE_ALERT_NOTIFY_ENABLED` - Enable database / MQTT critical path failure alerts
+- `BARK_KEY`: required, your Bark push key
+- `CAIYUN_TOKEN`: optional, richer weather details
+- `AMAP_KEY`: optional, better Chinese addresses
+- `SENTRY_NOTIFY_ENABLED`: optional, sentry notifications
+- `DEPARTURE_SAFETY_NOTIFY_ENABLED`: optional, departure safety alerts
+- `TPMS_NOTIFY_ENABLED`: optional, tire pressure alerts
+- `CHARGING_ISSUE_NOTIFY_ENABLED`: optional, charging issue alerts
+- `TRAFFIC_ANALYSIS_ENABLED`: optional, traffic-aware trip analysis
+
+Enabled by default and usually not needed in `.env`:
+
+- weak-network trip compensation
+- system health notifications
+- push state persistence under `./data`
 
 ## Weather Services
 
