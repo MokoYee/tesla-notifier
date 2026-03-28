@@ -75,7 +75,7 @@ def _select_trip_for_compensation(
             continue
 
         if end_time < cutoff:
-            logger.info(
+            logger.debug(
                 "候选行程已超出补偿窗口，停止继续补偿: "
                 f"id={trip.id}, end_time={trip.end_date}"
             )
@@ -89,7 +89,7 @@ def _select_trip_for_compensation(
 def _should_skip_trip_compensation(trigger_reason: str) -> bool:
     """行驶中不执行补偿检查，避免把上一段旧行程在当前行驶期间补发。"""
     if mqtt_handler and mqtt_handler.vehicle_state.state == "driving":
-        logger.info(f"车辆当前仍在 driving，跳过本次行程补偿检查: {trigger_reason}")
+        logger.debug(f"车辆当前仍在 driving，跳过本次行程补偿检查: {trigger_reason}")
         return True
 
     return False
@@ -175,12 +175,12 @@ async def reconcile_trip_notification(trigger_reason: str) -> bool:
             limit=TRIP_COMPENSATION_RECENT_LIMIT,
         )
         if not trips:
-            logger.info(f"未查询到可补偿的最近行程: {trigger_reason}")
+            logger.debug(f"未查询到可补偿的最近行程: {trigger_reason}")
             return False
 
         trip = _select_trip_for_compensation(trips)
         if trip is None:
-            logger.info(f"最近行程均无需补偿推送: {trigger_reason}")
+            logger.debug(f"最近行程均无需补偿推送: {trigger_reason}")
             return False
 
         return await _send_trip_notification(

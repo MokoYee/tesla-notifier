@@ -273,7 +273,7 @@ class MqttHandler:
         if prev_state == "driving" and payload == "offline":
             logger.info("检测到车辆驾驶中离线，进入行程补偿窗口")
             if self.on_trip_offline_reconcile and self._loop:
-                logger.info(
+                logger.debug(
                     "将在 "
                     f"{config.trip_offline_reconcile_delay} 秒后执行行程离线补偿检查"
                 )
@@ -824,17 +824,17 @@ class MqttHandler:
 
     async def _delayed_trip_offline_reconcile(self, expected_state_version: int) -> None:
         """在地下车库等弱网场景下，为超时结案提供延迟补偿检查。"""
-        logger.info(
+        logger.debug(
             f"等待 {config.trip_offline_reconcile_delay} 秒后执行行程离线补偿检查..."
         )
         await asyncio.sleep(float(config.trip_offline_reconcile_delay))
 
         if self.vehicle_state.drive_state_version != expected_state_version:
-            logger.info("行程离线补偿窗口内状态已变化，取消本次补偿检查")
+            logger.debug("行程离线补偿窗口内状态已变化，取消本次补偿检查")
             return
 
         if self.vehicle_state.state != "offline":
-            logger.info("车辆状态已不再是 offline，跳过本次补偿检查")
+            logger.debug("车辆状态已不再是 offline，跳过本次补偿检查")
             return
 
         logger.info("离线补偿窗口结束，开始执行行程补偿检查")
