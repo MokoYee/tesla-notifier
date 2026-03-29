@@ -257,6 +257,7 @@ async def send_notification(options: BarkOptions) -> bool:
     url = f"{config.bark_url}/{config.bark_key}"
     body = _compose_notification_body(options)
     level = _resolve_notification_level(options)
+    event_id = options.meta.event_id if options.meta is not None else "n/a"
 
     payload: dict[str, object] = {
         "title": options.title,
@@ -278,13 +279,13 @@ async def send_notification(options: BarkOptions) -> bool:
     log_with_data(
         logger,
         logging.INFO,
-        "准备发送推送",
+        f"准备推送: event_id={event_id}",
         {
             "title": options.title,
             "subtitle": options.subtitle,
             "group": options.group,
             "body_length": len(body),
-            "event_id": options.meta.event_id if options.meta else None,
+            "event_id": event_id,
             "priority": options.meta.priority if options.meta else None,
         },
     )
@@ -300,8 +301,11 @@ async def send_notification(options: BarkOptions) -> bool:
                     log_with_data(
                         logger,
                         logging.ERROR,
-                        f"推送失败: HTTP {response.status_code}",
-                        {"status_text": response.text},
+                        f"推送失败: event_id={event_id}, HTTP {response.status_code}",
+                        {
+                            "status_text": response.text,
+                            "event_id": event_id,
+                        },
                     )
                     return False
 
@@ -309,26 +313,49 @@ async def send_notification(options: BarkOptions) -> bool:
 
                 if result.get("code") == 200:
                     failure_monitor.record_bark_success()
-                    logger.info("推送成功")
+                    log_with_data(
+                        logger,
+                        logging.INFO,
+                        f"推送成功: event_id={event_id}",
+                        {
+                            "title": options.title,
+                            "group": options.group,
+                            "event_id": event_id,
+                        },
+                    )
                     return True
                 else:
                     failure_monitor.record_bark_failure(str(result))
-                    log_with_data(logger, logging.ERROR, "推送返回错误", result)
+                    log_with_data(
+                        logger,
+                        logging.ERROR,
+                        f"推送返回错误: event_id={event_id}",
+                        {
+                            "event_id": event_id,
+                            "result": result,
+                        },
+                    )
                     return False
 
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             # 网络相关异常，进行重试
             failure_monitor.record_bark_failure(str(e))
             if attempt < MAX_RETRIES:
-                logger.warning(f"推送失败（第{attempt}次），{RETRY_DELAY}秒后重试: {e}")
+                logger.warning(
+                    "推送失败"
+                    f"（event_id={event_id}，第{attempt}次），"
+                    f"{RETRY_DELAY}秒后重试: {e}"
+                )
                 await asyncio.sleep(RETRY_DELAY)
             else:
-                logger.error(f"推送失败，已重试{MAX_RETRIES}次: {e}")
+                logger.error(
+                    f"推送失败: event_id={event_id}，已重试{MAX_RETRIES}次: {e}"
+                )
 
         except Exception as e:
             # 其他异常，不重试
             failure_monitor.record_bark_failure(str(e))
-            logger.exception(f"推送异常: {e}")
+            logger.exception(f"推送异常: event_id={event_id}: {e}")
             return False
 
     return False

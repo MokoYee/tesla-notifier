@@ -265,6 +265,27 @@ def _get_enabled_feature_labels() -> list[str]:
     return labels
 
 
+def _get_weather_service_status() -> str:
+    """返回天气服务当前状态描述。"""
+    if config.caiyun_token:
+        return "彩云天气已启用，异常时自动回退 Open-Meteo"
+    return "未配置彩云天气，当前使用 Open-Meteo"
+
+
+def _get_traffic_sampler_status() -> str:
+    """返回路况采样当前状态描述。"""
+    if not config.traffic_analysis_enabled:
+        return "未启用（TRAFFIC_ANALYSIS_ENABLED=OFF）"
+    if not config.amap_key:
+        return "未启用（AMAP_KEY 未配置）"
+    return (
+        "已启用"
+        f"（间隔 {config.traffic_sample_interval}s，"
+        f"最小位移 {config.traffic_sample_min_distance_km} km，"
+        f"查询半径 {config.traffic_query_radius} m）"
+    )
+
+
 def _mqtt_connection_status() -> str:
     """返回 MQTT 连接状态文本。"""
     if not config.mqtt_enabled:
@@ -872,6 +893,12 @@ async def run() -> None:
     logger.info(f"  CAIYUN_TOKEN: {'(已配置)' if config.caiyun_token else '(未配置)'}")
     logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
+    logger.info(f"天气服务状态: {_get_weather_service_status()}")
+    logger.info(
+        "高德逆地理编码: "
+        f"{'已启用' if config.amap_key else '未启用（将使用 TeslaMate 原始地址）'}"
+    )
+    logger.info(f"高德路况采样: {_get_traffic_sampler_status()}")
     logger.debug(
         f"  TRIP_COMPENSATION_INTERVAL: {config.trip_compensation_interval}s"
     )
