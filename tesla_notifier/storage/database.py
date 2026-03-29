@@ -10,10 +10,10 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg_pool import AsyncConnectionPool
 
+from tesla_notifier.analytics.traffic import TrafficSummary
 from tesla_notifier.config import config
-from tesla_notifier.health import failure_monitor
 from tesla_notifier.logger import setup_logger
-from tesla_notifier.traffic import TrafficSummary
+from tesla_notifier.runtime.health import failure_monitor
 
 logger = setup_logger("database")
 
@@ -277,7 +277,7 @@ async def resolve_location_name(
     Returns:
         解析后的位置名称
     """
-    from tesla_notifier import amap
+    from tesla_notifier.integrations.amap import reverse_geocode
 
     async with conn.cursor() as cur:
         # 1. 优先使用已关联的 geofence 名称
@@ -321,7 +321,7 @@ async def resolve_location_name(
 
         # 3. 通过高德地图 API 获取中文地址
         if latitude and longitude:
-            amap_address = await amap.reverse_geocode(latitude, longitude)
+            amap_address = await reverse_geocode(latitude, longitude)
             if amap_address:
                 return amap_address
 

@@ -24,7 +24,32 @@ env:
   ALIYUN_IMAGE_NAME: ${{ github.repository_owner }}/tesla-notifier
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install '.[dev]'
+
+      - name: Run Ruff
+        run: ruff check tesla_notifier tests
+
+      - name: Run Mypy
+        run: mypy tesla_notifier tests
+
+      - name: Run Pytest
+        run: pytest -q
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read

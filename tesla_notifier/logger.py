@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 
 from tesla_notifier.config import config
@@ -22,7 +23,10 @@ class SimpleFormatter(logging.Formatter):
         location = f":{lineno}"
 
         # 格式：2026-01-16 15:17:21 INFO [main]:42 - 消息内容
-        base_msg = f"{time_str} {record.levelname:<5} [{record.name}]{location} - {record.getMessage()}"
+        base_msg = (
+            f"{time_str} {record.levelname:<5} "
+            f"[{record.name}]{location} - {record.getMessage()}"
+        )
 
         # 如果有附加数据，追加到消息后面
         if hasattr(record, "data") and record.data:
@@ -55,7 +59,10 @@ def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
 
 
 def log_with_data(
-    logger: logging.Logger, level: int, msg: str, data: dict | None = None
+    logger: logging.Logger,
+    level: int,
+    msg: str,
+    data: Mapping[str, object] | None = None,
 ) -> None:
     """带数据的日志
 
@@ -87,5 +94,5 @@ def log_with_data(
         func_name,
     )
     if data:
-        record.data = data  # type: ignore[attr-defined]
+        setattr(record, "data", dict(data))
     logger.handle(record)

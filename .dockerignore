@@ -1,0 +1,17 @@
+.env
+.git
+.github
+.history
+.mypy_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+build
+data
+debug.log
+logs
+test
+tests
+todo.txt
+image.png

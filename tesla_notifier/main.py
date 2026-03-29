@@ -13,15 +13,19 @@ from dotenv import load_dotenv
 # 加载 .env 文件（必须在导入 config 之前）
 load_dotenv()
 
-from tesla_notifier import bark, database
+from tesla_notifier.analytics.traffic import TrafficSampler
 from tesla_notifier.config import config
-from tesla_notifier.health import SystemAlert, failure_monitor
+from tesla_notifier.integrations.weather import (
+    generate_weather_suggestion,
+    get_weather,
+)
 from tesla_notifier.logger import setup_logger
-from tesla_notifier.mqtt_handler import MqttHandler
-from tesla_notifier.scheduler import Scheduler
-from tesla_notifier.state import push_state
-from tesla_notifier.traffic import TrafficSampler
-from tesla_notifier.weather import generate_weather_suggestion, get_weather
+from tesla_notifier.notifications import bark
+from tesla_notifier.runtime.health import SystemAlert, failure_monitor
+from tesla_notifier.runtime.mqtt_handler import MqttHandler
+from tesla_notifier.runtime.scheduler import Scheduler
+from tesla_notifier.storage import database
+from tesla_notifier.storage.state import push_state
 
 logger = setup_logger("main")
 
@@ -540,7 +544,7 @@ async def send_daily_briefing_task() -> None:
 
         if not weather:
             logger.warning("无法获取天气数据，使用默认值")
-            from tesla_notifier.weather import WeatherData
+            from tesla_notifier.integrations.weather import WeatherData
 
             weather = WeatherData(
                 condition="未知",

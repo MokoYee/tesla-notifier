@@ -10,8 +10,8 @@ from typing import Any
 
 import httpx
 
-from tesla_notifier.amap import wgs84_to_gcj02
 from tesla_notifier.config import config
+from tesla_notifier.integrations.amap import wgs84_to_gcj02
 from tesla_notifier.logger import setup_logger
 
 logger = setup_logger("traffic")

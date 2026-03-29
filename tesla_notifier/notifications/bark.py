@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from tesla_notifier.config import config
-from tesla_notifier.health import failure_monitor
 from tesla_notifier.logger import log_with_data, setup_logger
+from tesla_notifier.runtime.health import failure_monitor
 
 logger = setup_logger("bark")
 
@@ -642,7 +642,7 @@ async def send_daily_briefing(
     period_tag: str | None = None,
 ) -> bool:
     """发送每日简报"""
-    from tesla_notifier.weather import get_weather_icon
+    from tesla_notifier.integrations.weather import get_weather_icon
 
     # 根据天气状况获取动态图标
     weather_icon = get_weather_icon(weather_condition)

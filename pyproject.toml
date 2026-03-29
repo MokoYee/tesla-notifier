@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tesla-notifier"
-version = "1.1.0"
+version = "1.1.2"
 description = "TeslaMate 推送通知服务 - 支持行程结束、充电完成、周报月报等推送"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,7 @@ dependencies = [
 dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    "pytest>=8.3.0",
 ]
 
 [project.scripts]
@@ -31,6 +32,7 @@ include = ["tesla_notifier*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["tests/my"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
@@ -38,3 +40,8 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+exclude = ["(^|/)tests/my/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--ignore=tests/my"]

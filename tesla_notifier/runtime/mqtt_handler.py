@@ -9,8 +9,8 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from tesla_notifier.config import config
-from tesla_notifier.health import failure_monitor
 from tesla_notifier.logger import setup_logger
+from tesla_notifier.runtime.health import failure_monitor
 
 logger = setup_logger("mqtt")
 
@@ -1016,9 +1016,9 @@ class MqttHandler:
             return None
 
         try:
-            from tesla_notifier import amap
+            from tesla_notifier.integrations.amap import reverse_geocode
 
-            address = await amap.reverse_geocode(
+            address = await reverse_geocode(
                 self.vehicle_state.latitude,
                 self.vehicle_state.longitude,
             )
