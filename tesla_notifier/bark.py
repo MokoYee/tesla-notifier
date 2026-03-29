@@ -966,10 +966,12 @@ async def send_charging_issue_alert(
         title = "⚡ 充电电源异常"
         summary = "车辆已连接，但当前未获取到供电"
         subtitle = "当前无供电"
+        priority: NotificationPriority = "high"
     else:
         title = "⚠️ 充电意外停止"
         summary = "当前电量未达到设定上限，充电提前结束"
         subtitle = "未达到设定上限"
+        priority = "medium"
 
     lines = [
         f"🕐 {_current_local_time()}",
@@ -1014,7 +1016,7 @@ async def send_charging_issue_alert(
                     session_tag or _current_local_token(),
                 ),
                 certainty="fact",
-                priority="high",
+                priority=priority,
                 reason=(
                     "TeslaMate MQTT charging_state 命中异常状态，"
                     "例如 NoPower 或 Stopped 且 SoC 未达到目标"

@@ -15,6 +15,7 @@ from tesla_notifier.logger import setup_logger
 logger = setup_logger("mqtt")
 
 SENTRY_RECORDING_DISPLAY_STATE = 7
+CHARGING_STOP_CONFIRM_DELAY_SEC = 60.0
 TIRE_LABELS = {
     "fl": "左前",
     "fr": "右前",
@@ -44,6 +45,8 @@ class VehicleState:
     battery_level: int | None = None
     rated_range_km: float | None = None
     charging_state: str | None = None
+    charge_enable_request: bool | None = None
+    charge_energy_added: float | None = None
     charge_limit_soc: int | None = None
     charger_power: float | None = None
     plugged_in: bool | None = None
@@ -78,6 +81,9 @@ class VehicleState:
     active_charging_issue: str | None = None
     last_charging_issue_key: str | None = None
     last_charging_issue_time: datetime | None = None
+    charging_state_version: int = 0
+    charging_session_had_active_charge: bool = False
+    charging_stop_pending_confirmation: bool = False
     drive_state_version: int = 0
 
 
@@ -211,6 +217,10 @@ class MqttHandler:
             self._handle_battery_level(payload)
         elif topic_name == "rated_battery_range_km":
             self._handle_rated_range(payload)
+        elif topic_name == "charge_enable_request":
+            self._handle_charge_enable_request(payload)
+        elif topic_name == "charge_energy_added":
+            self._handle_charge_energy_added(payload)
         elif topic_name == "charge_limit_soc":
             self._handle_charge_limit_soc(payload)
         elif topic_name == "charger_power":
@@ -286,31 +296,71 @@ class MqttHandler:
         """处理充电状态变化"""
         prev_state = self.vehicle_state.charging_state
         self.vehicle_state.charging_state = payload
+        if prev_state != payload:
+            self.vehicle_state.charging_state_version += 1
+        state_version = self.vehicle_state.charging_state_version
 
         logger.info(f"charging_state 变化: {prev_state} -> {payload}")
 
         is_initial = self._mark_initialized("charging_state")
-        if payload in {"Charging", "Complete", "Disconnected"}:
+        if payload == "Charging":
+            self.vehicle_state.charging_session_had_active_charge = True
+            self.vehicle_state.charging_stop_pending_confirmation = False
             self._reset_charging_issue_state()
+            return
+
+        if payload == "Starting":
+            self.vehicle_state.charging_stop_pending_confirmation = False
+            return
+
+        if payload == "NoPower":
+            if not is_initial:
+                self.vehicle_state.charging_stop_pending_confirmation = False
+                self.vehicle_state.pending_charging_issue = True
+                self._maybe_emit_charging_issue()
+            return
+
+        if payload == "Disconnected":
+            if (
+                not is_initial
+                and self.vehicle_state.charging_session_had_active_charge
+                and self.vehicle_state.active_charging_issue is None
+                and prev_state in {"Charging", "Stopped"}
+            ):
+                logger.info(f"检测到充电结束: {prev_state} -> {payload}")
+                self._schedule_charging_complete()
+                self.vehicle_state.charging_session_had_active_charge = False
+                self.vehicle_state.charging_stop_pending_confirmation = False
+            else:
+                self.vehicle_state.charging_session_had_active_charge = False
+                self.vehicle_state.charging_stop_pending_confirmation = False
+
+            self._reset_charging_issue_state()
+            return
+
+        if payload == "Complete":
+            self._reset_charging_issue_state()
+            if not is_initial and self.vehicle_state.charging_session_had_active_charge:
+                logger.info(f"检测到充电结束: {prev_state} -> {payload}")
+                self._schedule_charging_complete()
+                self.vehicle_state.charging_session_had_active_charge = False
+                self.vehicle_state.charging_stop_pending_confirmation = False
+            return
 
         if (
             not is_initial
             and prev_state == "Charging"
-            and payload in {"Complete", "Stopped", "Disconnected"}
+            and payload == "Stopped"
         ):
-            if payload == "Stopped" and self._build_charging_issue_key() == "stopped_early":
-                logger.info("检测到充电提前停止，跳过充电完成推送")
-            elif self.on_charging_complete and self._loop:
+            if self._should_treat_stopped_as_complete():
                 logger.info(f"检测到充电结束: {prev_state} -> {payload}")
-                logger.info("将在 10 秒后触发充电完成处理")
-                asyncio.run_coroutine_threadsafe(
-                    self._delayed_charging_complete(),
-                    self._loop,
-                )
-
-        if not is_initial:
-            self.vehicle_state.pending_charging_issue = True
-            self._maybe_emit_charging_issue()
+                self._schedule_charging_complete()
+                self.vehicle_state.charging_session_had_active_charge = False
+                self.vehicle_state.charging_stop_pending_confirmation = False
+            else:
+                logger.info("检测到充电停止，进入异常确认窗口")
+                self.vehicle_state.charging_stop_pending_confirmation = True
+                self._schedule_charging_stopped_confirmation(state_version)
 
     def _handle_sentry_mode(self, payload: str) -> None:
         """处理哨兵模式变化"""
@@ -448,6 +498,28 @@ class MqttHandler:
         self.vehicle_state.charge_limit_soc = charge_limit_soc
         self._maybe_emit_charging_issue()
 
+    def _handle_charge_enable_request(self, payload: str) -> None:
+        """处理充电启停请求状态。"""
+        _, current_value, _ = self._update_bool_state(
+            "charge_enable_request",
+            "charge_enable_request",
+            payload,
+        )
+        if current_value is None:
+            return
+
+        self._maybe_emit_charging_issue()
+
+    def _handle_charge_energy_added(self, payload: str) -> None:
+        """处理本次充电累计电量。"""
+        charge_energy_added = self._parse_float(payload)
+        if charge_energy_added is None:
+            return
+
+        self.vehicle_state.charge_energy_added = charge_energy_added
+        if charge_energy_added > 0:
+            self.vehicle_state.charging_session_had_active_charge = True
+
     def _handle_charger_power(self, payload: str) -> None:
         """处理充电功率更新"""
         charger_power = self._parse_float(payload)
@@ -464,6 +536,14 @@ class MqttHandler:
             return
 
         if current_value is False and self.vehicle_state.charging_state == "Stopped":
+            if (
+                self.vehicle_state.charging_stop_pending_confirmation
+                and self.vehicle_state.charging_session_had_active_charge
+            ):
+                logger.info("检测到停止后拔枪，按充电完成处理")
+                self._schedule_charging_complete()
+                self.vehicle_state.charging_session_had_active_charge = False
+                self.vehicle_state.charging_stop_pending_confirmation = False
             self._reset_charging_issue_state()
             return
 
@@ -597,6 +677,16 @@ class MqttHandler:
         self.vehicle_state.pending_charging_issue = False
         self._schedule_callback(self.on_charging_issue_alert)
 
+    def _should_treat_stopped_as_complete(self) -> bool:
+        """判断 Stopped 是否更应视为正常结束而非异常。"""
+        if not self.vehicle_state.charging_session_had_active_charge:
+            return True
+
+        if self.vehicle_state.charge_enable_request is False:
+            return True
+
+        return self._build_charging_issue_key() != "stopped_early"
+
     def _build_charging_issue_key(self) -> str | None:
         """根据当前充电上下文生成异常类型。"""
         if self.vehicle_state.charging_state == "NoPower":
@@ -604,6 +694,7 @@ class MqttHandler:
 
         if (
             self.vehicle_state.charging_state == "Stopped"
+            and self.vehicle_state.charging_session_had_active_charge
             and self.vehicle_state.plugged_in is True
             and self.vehicle_state.battery_level is not None
             and self.vehicle_state.charge_limit_soc is not None
@@ -614,12 +705,13 @@ class MqttHandler:
 
         return None
 
-    def _reset_charging_issue_state(self) -> None:
+    def _reset_charging_issue_state(self, *, reset_cooldown: bool = False) -> None:
         """在充电恢复正常后清空异常状态。"""
         self.vehicle_state.pending_charging_issue = False
         self.vehicle_state.active_charging_issue = None
-        self.vehicle_state.last_charging_issue_key = None
-        self.vehicle_state.last_charging_issue_time = None
+        if reset_cooldown:
+            self.vehicle_state.last_charging_issue_key = None
+            self.vehicle_state.last_charging_issue_time = None
 
     def _schedule_callback(self, callback: AsyncCallback) -> None:
         """将协程安全切回主事件循环执行。"""
@@ -627,6 +719,27 @@ class MqttHandler:
             return
 
         self._loop.call_soon_threadsafe(self._create_task, callback())
+
+    def _schedule_charging_complete(self) -> None:
+        """延迟调度充电完成处理，等待 TeslaMate 完成落库。"""
+        if not self.on_charging_complete or not self._loop:
+            return
+
+        logger.info("将在 10 秒后触发充电完成处理")
+        asyncio.run_coroutine_threadsafe(
+            self._delayed_charging_complete(),
+            self._loop,
+        )
+
+    def _schedule_charging_stopped_confirmation(self, expected_state_version: int) -> None:
+        """对 Stopped 进行延迟确认，区分主动停充和异常中断。"""
+        if not self._loop:
+            return
+
+        asyncio.run_coroutine_threadsafe(
+            self._delayed_charging_stopped_confirmation(expected_state_version),
+            self._loop,
+        )
 
     def _schedule_sentry_deactivated(
         self,
@@ -840,6 +953,48 @@ class MqttHandler:
         logger.info("离线补偿窗口结束，开始执行行程补偿检查")
         if self.on_trip_offline_reconcile:
             await self.on_trip_offline_reconcile()
+
+    async def _delayed_charging_stopped_confirmation(self, expected_state_version: int) -> None:
+        """延迟确认 Stopped，避免把刚插枪和主动停充误判为异常。"""
+        logger.debug(
+            f"等待 {CHARGING_STOP_CONFIRM_DELAY_SEC:.0f} 秒确认充电是否异常停止..."
+        )
+        await asyncio.sleep(CHARGING_STOP_CONFIRM_DELAY_SEC)
+
+        if self.vehicle_state.charging_state_version != expected_state_version:
+            logger.debug("充电状态已变化，取消本次异常停止确认")
+            return
+
+        if not self.vehicle_state.charging_stop_pending_confirmation:
+            logger.debug("当前无待确认的停止事件，跳过异常停止确认")
+            return
+
+        if self.vehicle_state.charging_state != "Stopped":
+            logger.debug("充电状态已不再是 Stopped，跳过异常停止确认")
+            return
+
+        if self.vehicle_state.plugged_in is not True:
+            logger.info("充电停止后已断开连接，按充电完成处理")
+            self._schedule_charging_complete()
+            self.vehicle_state.charging_session_had_active_charge = False
+            self.vehicle_state.charging_stop_pending_confirmation = False
+            self._reset_charging_issue_state()
+            return
+
+        if self._should_treat_stopped_as_complete():
+            logger.info("充电停止确认后判定为正常结束，发送充电完成通知")
+            self._schedule_charging_complete()
+            self.vehicle_state.charging_session_had_active_charge = False
+            self.vehicle_state.charging_stop_pending_confirmation = False
+            self._reset_charging_issue_state()
+            return
+
+        logger.info("充电停止确认后仍未恢复，按异常停止处理")
+        self.vehicle_state.charging_stop_pending_confirmation = False
+        self.vehicle_state.pending_charging_issue = True
+        self._maybe_emit_charging_issue()
+        if self.vehicle_state.active_charging_issue is not None:
+            self.vehicle_state.charging_session_had_active_charge = False
 
     async def _delayed_charging_complete(self) -> None:
         """延迟触发充电完成处理"""
