@@ -67,6 +67,7 @@
 | --- | --- | --- | --- |
 | `CAR_ID` | `1` | 否 | TeslaMate 车辆 ID，需与 MQTT / 数据库中的车辆一致 |
 | `MIN_TRIP_DISTANCE` | `1` | 否 | 小于该里程的行程不推送 |
+| `DRIVING_COMMENTARY_STYLE` | `normal` | 否 | 行程点评文案风格，可选 `normal` / `aggressive` |
 | `TZ` | `Asia/Shanghai` | 否 | 应用时区 |
 | `STATE_FILE` | `./data/state.json` | 否 | 已推送记录持久化文件路径 |
 | `LOG_LEVEL` | `INFO` | 否 | 日志级别，支持 `DEBUG`、`INFO`、`WARNING`、`ERROR` |
@@ -155,6 +156,8 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 - 哨兵录制事件基于 TeslaMate MQTT 实时状态判断，并使用 `SENTRY_RECORDING_COOLDOWN` 防重复推送。
 - 如果你只想用实时通知，可以保留 `ENABLE_MQTT=true`，并按需关闭 `ENABLE_CRON`。
 - 行程路况分析使用本地 JSON 缓存，不会额外引入数据库；缓存目录默认为 `./data/traffic_snapshots/`。
+- `DRIVING_COMMENTARY_STYLE` 默认为 `normal`，未写入 `.env.example`；只有显式配置时才会切到更敢说的 `aggressive` 风格。
+- 行程点评会综合速度、急加速 / 急减速、路况压力以及海拔起伏特征做本地匹配。
 - 根据高德官方文档，交通态势查询属于高级服务接口；如果 key 没有权限，服务会自动跳过路况采样，不影响基础通知。
 - 业务通知默认不展示技术性元数据；事件 ID、类型、优先级与触发依据主要用于日志归因与系统通知排障。
 - Bark 自身失败时无法再通过 Bark 反向告警，因此当前策略是记录详细日志，并在链路恢复后继续发送后续通知。

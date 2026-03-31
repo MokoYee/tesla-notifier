@@ -11,19 +11,26 @@
 TeslaMate 车辆状态推送插件，聚焦通知而不是重后台: 行程结束、充电完成、哨兵事件和安全提醒实时推送到 iPhone，让你随时掌握爱车动态。
 
 ## 📸 推送示例
-<img src=".github/assets/example.jpg" width="400" alt="示例图">
+<table>
+  <tr>
+    <td width="25%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="日报与行程结束示例"></td>
+    <td width="25%"><img src=".github/assets/notify-charging-complete.jpg" alt="充电完成示例"></td>
+    <td width="25%"><img src=".github/assets/notify-charging-alerts.jpg" alt="充电异常示例"></td>
+    <td width="25%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="哨兵通知示例"></td>
+  </tr>
+</table>
 
 ## 功能
 
 ### 实时推送（MQTT 驱动）
 
-- **行程结束推送** - 行程结束后自动推送详情（起终点、里程、能耗、100 分制驾驶评分、路况分析）
-- **充电完成推送** - 充电完成后推送充电详情（充入电量、峰值功率、费用）
+- **行程结束推送** - 行程结束后自动推送详情（起终点、里程、能耗、100 分制驾驶评分、本地匹配行程点评）
+- **充电完成推送** - 充电完成后推送充电详情（充入电量、峰值功率、AC/DC 类型、充电效率）
 - **哨兵模式推送** - 哨兵模式激活/关闭状态推送，支持实时录制事件提醒
 - **离车安全提醒** - 离车后检测未锁车、门窗未关、前后备箱未关、充电口未关
 - **胎压异常提醒** - 基于 TeslaMate `tpms_soft_warning_*` 实时推送异常轮位和胎压
 - **充电异常提醒** - 检测 `NoPower` 或充电提前停止且未达到目标电量的情况
-- **行程路况分析** - 可选接入高德交通态势，低频采样后并入行程评分与分析文案
+- **行程路况分析** - 可选接入高德交通态势，低频采样后并入行程评分与点评文案
 - **通知可信度元数据** - 系统通知和日志会记录事件 ID、事件类型、优先级和触发依据，便于回溯与排障
 
 ### 定时报告（Cron 驱动）

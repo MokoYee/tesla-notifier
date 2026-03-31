@@ -11,20 +11,26 @@
 TeslaMate notification companion focused on pushes instead of a heavy backend: get trip, charging, sentry, and safety alerts on your iPhone in real time.
 
 ## 📸 Notification Examples
-
-<img src=".github/assets/example.jpg" width="400" alt="Notification Examples">
+<table>
+  <tr>
+    <td width="25%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="Daily briefing and trip summary example"></td>
+    <td width="25%"><img src=".github/assets/notify-charging-complete.jpg" alt="Charging complete example"></td>
+    <td width="25%"><img src=".github/assets/notify-charging-alerts.jpg" alt="Charging alerts example"></td>
+    <td width="25%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="Sentry notification example"></td>
+  </tr>
+</table>
 
 ## Features
 
 ### Real-time Notifications (MQTT-driven)
 
-- **Trip Summary** - Automatic push after each trip (origin/destination, distance, energy consumption, 100-point driving score, traffic-aware analysis)
-- **Charging Complete** - Push notification when charging finishes (energy added, peak power, cost)
+- **Trip Summary** - Automatic push after each trip (origin/destination, distance, energy consumption, 100-point driving score, local trip commentary)
+- **Charging Complete** - Push notification when charging finishes (energy added, peak power, AC/DC type, charging efficiency)
 - **Sentry Mode** - Notifications when sentry mode activates/deactivates, plus realtime recording event alerts
 - **Departure Safety Alert** - Detects unlocked car, open windows/doors, open trunks, or an open charge port after leaving the vehicle
 - **Tire Pressure Alert** - Realtime tire pressure warning based on TeslaMate `tpms_soft_warning_*`
 - **Charging Issue Alert** - Detects `NoPower` or charging stopped early before reaching the target SoC
-- **Traffic-aware Trip Analysis** - Optional Amap traffic sampling during a drive, merged into trip scoring and narrative analysis
+- **Traffic-aware Trip Analysis** - Optional Amap traffic sampling during a drive, merged into trip scoring and commentary
 - **Notification Trust Metadata** - System notifications and logs include event IDs, event type, priority, and trigger reasons for easier troubleshooting
 
 ### Scheduled Reports (Cron-driven)
