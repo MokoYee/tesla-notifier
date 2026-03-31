@@ -11,6 +11,10 @@ import psycopg
 from psycopg_pool import AsyncConnectionPool
 
 from tesla_notifier.analytics.traffic import TrafficSummary
+from tesla_notifier.analytics.trip_commentary import (
+    TripCommentaryInput,
+    build_trip_commentary,
+)
 from tesla_notifier.config import config
 from tesla_notifier.logger import setup_logger
 from tesla_notifier.runtime.health import failure_monitor
@@ -115,7 +119,10 @@ class ChargingData:
     start_battery_level: int
     end_battery_level: int
     charge_energy_added: float
+    charge_energy_used: float | None
     charger_power_max: float
+    charge_type: str | None
+    charging_efficiency: float | None
     start_rated_range_km: float
     end_rated_range_km: float
     outside_temp_avg: float | None
@@ -148,7 +155,7 @@ class DrivingScore:
     hard_accel_rate: float  # 每 100 km 急加速次数
     hard_brake_rate: float  # 每 100 km 急减速次数
     confidence: float  # 样本置信度，主要用于短途平滑
-    analysis_summary: str  # 自动分析摘要
+    trip_commentary: str | None  # 行程点评
     traffic_label: str | None = None  # 行程交通画像
     traffic_summary: str | None = None  # 行程交通摘要
     traffic_sample_count: int = 0  # 路况采样次数
@@ -164,6 +171,38 @@ class DrivingContext:
     overspeed_ratio: float  # 超高速占比（>120 km/h）
     stop_go_density: float  # 每 10 km 停走事件数
     road_context: str  # 路况标签
+
+
+@dataclass
+class TerrainContext:
+    """地形上下文"""
+
+    elevation_gain_m: float  # 累计爬升
+    elevation_loss_m: float  # 累计下降
+    net_elevation_change_m: float  # 净海拔变化
+    terrain_variation_m_per_km: float  # 每公里起伏强度
+
+
+def _calculate_charging_efficiency(
+    charge_energy_added: float,
+    charge_energy_used: float | None,
+) -> float | None:
+    """计算充电效率百分比。
+
+    按较大的能量统计口径计算效率，避免补能量与总取电量不一致时高估结果。
+    """
+    if charge_energy_added <= 0:
+        return None
+
+    energy_candidates = [charge_energy_added]
+    if charge_energy_used is not None and charge_energy_used > 0:
+        energy_candidates.append(charge_energy_used)
+
+    denominator = max(energy_candidates)
+    if denominator <= 0:
+        return None
+
+    return (charge_energy_added / denominator) * 100.0
 
 
 async def init_pool() -> None:
@@ -431,6 +470,7 @@ async def get_latest_charging(car_id: str) -> ChargingData | None:
                         c.start_battery_level,
                         c.end_battery_level,
                         c.charge_energy_added,
+                        c.charge_energy_used,
                         c.start_rated_range_km,
                         c.end_rated_range_km,
                         c.outside_temp_avg,
@@ -451,23 +491,35 @@ async def get_latest_charging(car_id: str) -> ChargingData | None:
                     return None
 
                 charging_id = row[0]
+                charge_energy_added = float(row[7] or 0)
+                charge_energy_used = float(row[8]) if row[8] is not None else None
 
-                # 从 charges 表查询该充电过程的最大功率
+                # 根据充电记录中的有效相数推断 AC/DC：存在有效相数时视为 AC，否则按 DC 处理。
                 await cur.execute(
                     """
-                    SELECT MAX(charger_power) as max_power
+                    SELECT
+                        MAX(charger_power) as max_power,
+                        CASE
+                            WHEN NULLIF(mode() WITHIN GROUP (ORDER BY charger_phases), 0) IS NULL
+                                THEN 'DC'
+                            ELSE 'AC'
+                        END as charge_type
                     FROM charges
                     WHERE charging_process_id = %s
-                    AND charger_power IS NOT NULL
                     """,
                     (charging_id,),
                 )
                 power_row = await cur.fetchone()
                 charger_power_max = float(power_row[0]) if power_row and power_row[0] else 0.0
+                charge_type = str(power_row[1]) if power_row and power_row[1] else None
+                charging_efficiency = _calculate_charging_efficiency(
+                    charge_energy_added,
+                    charge_energy_used,
+                )
 
                 # 解析充电位置名称
                 location = await resolve_location_name(
-                    conn, row[11], row[12], row[13]
+                    conn, row[12], row[13], row[14]
                 )
 
                 return ChargingData(
@@ -479,11 +531,14 @@ async def get_latest_charging(car_id: str) -> ChargingData | None:
                     duration_min=float(row[4] or 0),
                     start_battery_level=int(row[5] or 0),
                     end_battery_level=int(row[6] or 0),
-                    charge_energy_added=float(row[7] or 0),
+                    charge_energy_added=charge_energy_added,
+                    charge_energy_used=charge_energy_used,
                     charger_power_max=charger_power_max,
-                    start_rated_range_km=float(row[8] or 0),
-                    end_rated_range_km=float(row[9] or 0),
-                    outside_temp_avg=float(row[10]) if row[10] else None,
+                    charge_type=charge_type,
+                    charging_efficiency=charging_efficiency,
+                    start_rated_range_km=float(row[9] or 0),
+                    end_rated_range_km=float(row[10] or 0),
+                    outside_temp_avg=float(row[11]) if row[11] else None,
                 )
     except Exception as e:
         logger.exception(f"查询最新充电记录失败: {e}")
@@ -895,6 +950,49 @@ def _build_driving_context(
     )
 
 
+def _build_terrain_context(
+    elevation_data: list[float],
+    distance_km: float,
+) -> TerrainContext:
+    """基于海拔序列提取爬坡、下坡与起伏强度。"""
+    if len(elevation_data) < 2 or distance_km <= 0:
+        return TerrainContext(
+            elevation_gain_m=0.0,
+            elevation_loss_m=0.0,
+            net_elevation_change_m=0.0,
+            terrain_variation_m_per_km=0.0,
+        )
+
+    gain_m = 0.0
+    loss_m = 0.0
+    start_elevation = elevation_data[0]
+    last_elevation = start_elevation
+    anchor_elevation = start_elevation
+
+    for elevation in elevation_data[1:]:
+        delta = elevation - anchor_elevation
+
+        # 过滤 GPS 小幅抖动，同时保留逐步累积后的真实爬升 / 下坡。
+        if delta >= 3.0:
+            gain_m += delta
+            anchor_elevation = elevation
+        elif delta <= -3.0:
+            loss_m += abs(delta)
+            anchor_elevation = elevation
+
+        last_elevation = elevation
+
+    net_change_m = last_elevation - start_elevation
+    terrain_variation_m_per_km = (gain_m + loss_m) / max(distance_km, 1.0)
+
+    return TerrainContext(
+        elevation_gain_m=gain_m,
+        elevation_loss_m=loss_m,
+        net_elevation_change_m=net_change_m,
+        terrain_variation_m_per_km=terrain_variation_m_per_km,
+    )
+
+
 def _get_expected_event_rates(context: DrivingContext) -> tuple[float, float]:
     """根据路况上下文估算可接受的动作基线
 
@@ -980,56 +1078,50 @@ def _calculate_speed_discipline_penalty(
     return min(14.0, overspeed_penalty + peak_penalty)
 
 
-def _build_driving_analysis(
+def _build_trip_commentary(
+    drive_id: int,
+    distance_km: float,
+    duration_min: float,
+    hard_accel_count: int,
+    hard_brake_count: int,
     context: DrivingContext,
     hard_accel_rate: float,
     hard_brake_rate: float,
-    expected_accel_rate: float,
-    expected_brake_rate: float,
     confidence: float,
-) -> str:
+    traffic_label: str | None,
+    outside_temp_c: float | None,
+    max_speed_kmh: float | None,
+    terrain: TerrainContext,
+) -> str | None:
     """生成面向车主的行程点评
 
-    目标是把评分结果翻译成用户能直接理解的话，而不是暴露系统分析口径。
+    使用本地特征匹配替代固定分支，保证文案可扩展且无需引入外部模型。
     """
-    accel_ratio = hard_accel_rate / max(expected_accel_rate, 1.0)
-    brake_ratio = hard_brake_rate / max(expected_brake_rate, 1.0)
-
-    positives: list[str] = []
-    cautions: list[str] = []
-
-    if accel_ratio <= 0.6:
-        positives.append("提速节奏比较克制")
-    elif accel_ratio >= 1.35:
-        cautions.append("起步和再提速有些偏急")
-
-    if brake_ratio <= 0.7:
-        positives.append("制动预判比较稳")
-    elif brake_ratio >= 1.2:
-        cautions.append("减速收得稍晚")
-
-    if context.overspeed_ratio >= 0.12:
-        cautions.append("高速阶段车速偏快")
-
-    if confidence < 0.35:
-        return "这趟更像下楼取个快递，路程太短，分数先当热身参考。"
-
-    if "高速阶段车速偏快" in cautions:
-        summary = "这趟高速脚有点重，续航先替你叹了口气。"
-    elif "减速收得稍晚" in cautions:
-        summary = "这趟减速收得稍晚，车子差点替你先紧张。"
-    elif "起步和再提速有些偏急" in cautions:
-        summary = "这趟起步和再提速有点着急，电门像在赶下一场。"
-    elif len(positives) >= 2:
-        summary = "这趟开得挺丝滑，乘客大概率用不上扶手。"
-    elif "提速节奏比较克制" in positives:
-        summary = "这趟提速拿捏得不错，节奏稳稳在线。"
-    elif "制动预判比较稳" in positives:
-        summary = "这趟刹车预判在线，收放比平时更从容。"
-    else:
-        summary = "这趟整体状态在线，没有明显掉分项。"
-
-    return summary
+    avg_speed_kmh = distance_km / (duration_min / 60.0) if duration_min > 0 else 0.0
+    return build_trip_commentary(
+        TripCommentaryInput(
+            drive_id=drive_id,
+            distance_km=distance_km,
+            duration_min=duration_min,
+            avg_speed_kmh=avg_speed_kmh,
+            max_speed_kmh=max_speed_kmh,
+            hard_accel_rate=hard_accel_rate,
+            hard_brake_rate=hard_brake_rate,
+            hard_accel_count=hard_accel_count,
+            hard_brake_count=hard_brake_count,
+            road_context=context.road_context,
+            traffic_label=traffic_label,
+            outside_temp_c=outside_temp_c,
+            confidence=confidence,
+            overspeed_ratio=context.overspeed_ratio,
+            stop_go_density=context.stop_go_density,
+            elevation_gain_m=terrain.elevation_gain_m,
+            elevation_loss_m=terrain.elevation_loss_m,
+            net_elevation_change_m=terrain.net_elevation_change_m,
+            terrain_variation_m_per_km=terrain.terrain_variation_m_per_km,
+            style=config.driving_commentary_style,
+        )
+    )
 
 # ========== 急加速/急减速检测算法 ==========
 # 急加速检测参数
@@ -1217,7 +1309,7 @@ async def get_trip_driving_score(
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
-                    SELECT distance
+                    SELECT distance, duration_min, outside_temp_avg, speed_max
                     FROM drives
                     WHERE id = %s
                     """,
@@ -1225,11 +1317,18 @@ async def get_trip_driving_score(
                 )
                 drive_row = await cur.fetchone()
                 distance_km = float(drive_row[0]) if drive_row and drive_row[0] else 0.0
+                duration_min = float(drive_row[1]) if drive_row and drive_row[1] else 0.0
+                outside_temp_avg = (
+                    float(drive_row[2])
+                    if drive_row and drive_row[2] is not None
+                    else None
+                )
+                speed_max = float(drive_row[3]) if drive_row and drive_row[3] else None
 
                 # 获取该行程的所有位置数据（按时间排序）
                 await cur.execute(
                     """
-                    SELECT power, speed, date
+                    SELECT power, speed, elevation, date
                     FROM positions
                     WHERE drive_id = %s
                     ORDER BY date ASC
@@ -1243,14 +1342,17 @@ async def get_trip_driving_score(
 
                 # 转换为轨迹数据列表（用于急加速检测）
                 motion_data: list[tuple[float, float, datetime]] = [
-                    (float(row[0]), float(row[1]), row[2])
+                    (float(row[0]), float(row[1]), row[3])
                     for row in rows
                     if row[0] is not None and row[1] is not None
                 ]
 
                 # 转换为速度数据列表（用于急减速检测）
                 speed_data: list[tuple[float, datetime]] = [
-                    (float(row[1]), row[2]) for row in rows if row[1] is not None
+                    (float(row[1]), row[3]) for row in rows if row[1] is not None
+                ]
+                elevation_data: list[float] = [
+                    float(row[2]) for row in rows if row[2] is not None
                 ]
 
                 # 计算急加速和急减速事件数
@@ -1260,6 +1362,7 @@ async def get_trip_driving_score(
                 hard_brake_rate = _rate_per_100km(hard_brake_count, distance_km)
 
                 context = _build_driving_context(speed_data, distance_km)
+                terrain = _build_terrain_context(elevation_data, distance_km)
                 expected_accel_rate, expected_brake_rate = _get_expected_event_rates(
                     context
                 )
@@ -1286,13 +1389,20 @@ async def get_trip_driving_score(
                 blended_score = raw_score * confidence + 85.0 * (1.0 - confidence)
                 final_score = round(_clamp(blended_score, 0.0, 100.0))
                 label = _calculate_score_label(final_score)
-                analysis_summary = _build_driving_analysis(
+                trip_commentary = _build_trip_commentary(
+                    drive_id,
+                    distance_km,
+                    duration_min,
+                    hard_accel_count,
+                    hard_brake_count,
                     context,
                     hard_accel_rate,
                     hard_brake_rate,
-                    expected_accel_rate,
-                    expected_brake_rate,
                     confidence,
+                    traffic_summary.traffic_label if traffic_summary is not None else None,
+                    outside_temp_avg,
+                    speed_max,
+                    terrain,
                 )
 
                 return DrivingScore(
@@ -1304,7 +1414,7 @@ async def get_trip_driving_score(
                     hard_accel_rate=hard_accel_rate,
                     hard_brake_rate=hard_brake_rate,
                     confidence=confidence,
-                    analysis_summary=analysis_summary,
+                    trip_commentary=trip_commentary,
                     traffic_label=(
                         traffic_summary.traffic_label
                         if traffic_summary is not None

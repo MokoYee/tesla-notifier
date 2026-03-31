@@ -1,0 +1,404 @@
+[fallbacks.normal]
+trip_endurance_caution = "🛣️ 连开几小时了，后段动作再收一点"
+trip_endurance_positive = "🛣️ 连开几小时还稳得住，耐力真在线"
+trip_roadtrip_caution = "📍 几百公里之后，脚下还能再稳一点"
+trip_roadtrip_positive = "📍 几百公里一口气拿下，状态真在线"
+terrain_mountainous_caution = "高低差挺大，预判可以再早一点"
+terrain_mountainous_positive = "山路起伏不少，车感还在线"
+terrain_peak_finish_caution = "一路往上抬，电门再柔一点"
+terrain_peak_finish_positive = "一路往上抬，节奏还挺稳"
+terrain_valley_finish_caution = "一路往下收，刹车有点顶着不放"
+terrain_valley_finish_positive = "一路往下收，收放还是顺的"
+terrain_rolling_caution = "一路起伏不小，节奏有点跟着上头"
+terrain_rolling_positive = "起伏挺多，节奏还算稳"
+traffic_clear_slow = "路况挺顺，可以再果断一点"
+traffic_congested_caution = "堵车已经够忙了，脚下再柔一点"
+highway_caution = "巡航有点上头，余量再多些"
+risk_brake_heavy = "刹车偏多，预判可以再早一点"
+caution_tone = "速度起伏偏大，节奏再稳一点"
+default = "动作很整洁，车感在线"
+
+[fallbacks.aggressive]
+trip_endurance_caution = "🛣️ 连开几小时了，后段还在上头啊"
+trip_endurance_positive = "🛣️ 连开几小时还没掉线，今天是真能打"
+trip_roadtrip_caution = "📍 都开到几百公里了，脚下还在加戏啊"
+trip_roadtrip_positive = "几百公里一口气拿下，牛逼啊🐮"
+terrain_mountainous_caution = "高低差都拉满了，车都快开成过山车了"
+terrain_mountainous_positive = "高低差拉满，你还真稳住了"
+terrain_peak_finish_caution = "海拔一路往上冲，电门都踩成冲榜模式了"
+terrain_peak_finish_positive = "海拔一路上扬，你还真没上头"
+terrain_valley_finish_caution = "一路往下放坡，刹车还在一直续杯"
+terrain_valley_finish_positive = "一路往下放坡，收放居然挺稳"
+terrain_rolling_caution = "一路起起伏伏，节奏都快开炸了"
+terrain_rolling_positive = "今天像在刷山路副本，脚下居然还挺稳"
+traffic_clear_slow = "路况都放行了，你还在当移动路障呢"
+traffic_congested_caution = "堵车已经够烦了，脚下还在加戏"
+highway_caution = "秋名山车神附身了吧，后段收一收"
+caution_tone = "电门戏有点多，今天太上头了吧"
+default = "今天手感不错，车感拿捏住了"
+
+[[templates]]
+text = "通勤节奏很顺，收放干净"
+required = ["positive_tone", "scene_city"]
+forbidden = ["caution_tone", "traffic_congested"]
+vector = { scene_city = 2.0, control_smooth = 2.0, pace_calm = 1.1, positive_tone = 1.0 }
+
+[[templates]]
+text = "动作利落，通勤状态在线"
+required = ["positive_tone", "scene_city"]
+forbidden = ["caution_tone", "traffic_congested"]
+vector = { scene_city = 2.0, control_stable = 1.7, control_smooth = 1.2, positive_tone = 1.0 }
+
+[[templates]]
+text = "高速巡航挺稳，状态在线"
+required = ["positive_tone", "scene_highway"]
+forbidden = ["caution_tone"]
+vector = { scene_highway = 2.0, control_stable = 1.9, positive_tone = 1.0 }
+
+[[templates]]
+text = "巡航节奏很顺，脚下很稳"
+required = ["positive_tone", "scene_highway"]
+forbidden = ["caution_tone"]
+vector = { scene_highway = 2.0, control_smooth = 1.8, positive_tone = 1.0 }
+
+[[templates]]
+text = "拥堵里没乱，脚下拿捏住了"
+required = ["positive_tone", "traffic_congested"]
+forbidden = ["caution_tone"]
+vector = { traffic_congested = 2.1, stable_in_pressure = 2.0, positive_tone = 1.0 }
+
+[[templates]]
+text = "拥堵归拥堵，节奏没散"
+required = ["positive_tone", "traffic_congested"]
+forbidden = ["caution_tone"]
+vector = { traffic_congested = 2.1, control_stable = 1.7, stable_in_pressure = 1.3, positive_tone = 1.0 }
+
+[[templates]]
+text = "动作很整洁，车感在线"
+required = ["positive_tone", "scene_mixed"]
+forbidden = ["caution_tone"]
+vector = { scene_mixed = 2.0, control_smooth = 1.8, positive_tone = 1.0 }
+
+[[templates]]
+text = "节奏稳稳拿住，没有多余动作"
+required = ["positive_tone", "scene_mixed"]
+forbidden = ["caution_tone"]
+vector = { scene_mixed = 2.0, control_stable = 1.9, positive_tone = 1.0 }
+
+[[templates]]
+text = "长途状态在线，后程也稳"
+required = ["positive_tone", "trip_long"]
+forbidden = ["caution_tone"]
+vector = { trip_long = 3.0, control_stable = 1.7, positive_tone = 1.0 }
+
+[[templates]]
+text = "里程拉长了，动作还是稳的"
+required = ["positive_tone", "trip_long"]
+forbidden = ["caution_tone"]
+vector = { trip_long = 3.0, control_smooth = 1.6, positive_tone = 1.0 }
+
+[[templates]]
+text = "🛣️ 连开几小时还稳得住，耐力真在线"
+required = ["positive_tone", "trip_endurance"]
+forbidden = ["caution_tone"]
+vector = { trip_endurance = 3.4, control_stable = 1.4, positive_tone = 1.0 }
+
+[[templates]]
+text = "📍 几百公里一口气拿下，状态真在线"
+required = ["positive_tone", "trip_roadtrip"]
+forbidden = ["caution_tone"]
+vector = { trip_roadtrip = 3.4, control_smooth = 1.4, positive_tone = 1.0 }
+
+[[templates]]
+text = "天气偏冷，动作还是稳的"
+required = ["positive_tone", "temp_low"]
+forbidden = ["caution_tone"]
+vector = { temp_low = 2.0, control_stable = 1.5, positive_tone = 1.0 }
+
+[[templates]]
+text = "爬坡不少，脚下还能稳住"
+required = ["positive_tone", "terrain_uphill"]
+forbidden = ["caution_tone"]
+vector = { terrain_uphill = 3.0, control_stable = 1.5, positive_tone = 1.0 }
+
+[[templates]]
+text = "下坡路段多，节奏拿捏住了"
+required = ["positive_tone", "terrain_downhill"]
+forbidden = ["caution_tone"]
+vector = { terrain_downhill = 3.0, control_stable = 1.5, positive_tone = 1.0 }
+
+[[templates]]
+text = "起伏挺多，节奏还算稳"
+required = ["positive_tone", "terrain_rolling"]
+forbidden = ["caution_tone"]
+vector = { terrain_rolling = 3.0, control_stable = 1.4, positive_tone = 1.0 }
+
+[[templates]]
+text = "一路往上抬，节奏还挺稳"
+required = ["positive_tone", "terrain_peak_finish"]
+forbidden = ["caution_tone"]
+vector = { terrain_peak_finish = 3.2, control_stable = 1.5, positive_tone = 1.0 }
+
+[[templates]]
+text = "一路往下收，收放还是顺的"
+required = ["positive_tone", "terrain_valley_finish"]
+forbidden = ["caution_tone"]
+vector = { terrain_valley_finish = 3.2, control_smooth = 1.5, positive_tone = 1.0 }
+
+[[templates]]
+text = "山路起伏不少，车感还在线"
+required = ["positive_tone", "terrain_mountainous"]
+forbidden = ["caution_tone"]
+vector = { terrain_mountainous = 3.2, control_stable = 1.4, positive_tone = 1.0 }
+
+[[templates]]
+text = "刹车偏多，预判可以再早一点"
+required = ["caution_tone", "risk_brake_heavy"]
+forbidden = ["terrain_downhill", "traffic_congested"]
+vector = { risk_brake_heavy = 2.2, caution_tone = 1.4 }
+
+[[templates]]
+text = "电门有点急，收一收会更顺"
+required = ["caution_tone"]
+vector = { risk_accel_heavy = 2.0, control_aggressive = 1.4, caution_tone = 1.3 }
+
+[[templates]]
+text = "🛣️ 连开几小时了，后段动作再收一点"
+required = ["caution_tone", "trip_endurance"]
+vector = { trip_endurance = 3.1, control_aggressive = 1.3, caution_tone = 1.3 }
+
+[[templates]]
+text = "📍 几百公里之后，脚下还能再稳一点"
+required = ["caution_tone", "trip_roadtrip"]
+vector = { trip_roadtrip = 3.1, control_aggressive = 1.3, caution_tone = 1.3 }
+
+[[templates]]
+text = "巡航有点上头，余量再多些"
+required = ["caution_tone", "scene_highway"]
+vector = { scene_highway = 2.0, risk_speed_high = 2.0, pace_fast = 1.1, caution_tone = 1.3 }
+
+[[templates]]
+text = "堵车已经够忙了，脚下再柔一点"
+required = ["caution_tone", "traffic_congested"]
+vector = { traffic_congested = 2.1, control_aggressive = 1.7, caution_tone = 1.4 }
+
+[[templates]]
+text = "上坡路不少，电门可以再柔一点"
+required = ["caution_tone", "terrain_uphill"]
+vector = { terrain_uphill = 3.0, control_aggressive = 1.7, caution_tone = 1.3 }
+
+[[templates]]
+text = "下坡挺多，刹车都快成主旋律了"
+required = ["caution_tone", "terrain_downhill"]
+vector = { terrain_downhill = 3.0, risk_brake_heavy = 1.8, caution_tone = 1.3 }
+
+[[templates]]
+text = "一路起伏不小，节奏有点跟着上头"
+required = ["caution_tone", "terrain_rolling"]
+vector = { terrain_rolling = 3.0, control_aggressive = 1.6, caution_tone = 1.3 }
+
+[[templates]]
+text = "一路往上抬，电门再柔一点"
+required = ["caution_tone", "terrain_peak_finish"]
+vector = { terrain_peak_finish = 3.0, control_aggressive = 1.6, caution_tone = 1.3 }
+
+[[templates]]
+text = "一路往下收，刹车有点顶着不放"
+required = ["caution_tone", "terrain_valley_finish"]
+vector = { terrain_valley_finish = 3.0, risk_brake_heavy = 1.8, caution_tone = 1.3 }
+
+[[templates]]
+text = "高低差挺大，预判可以再早一点"
+required = ["caution_tone", "terrain_mountainous"]
+vector = { terrain_mountainous = 3.0, control_aggressive = 1.4, caution_tone = 1.3 }
+
+[[templates]]
+text = "速度起伏偏大，节奏再稳一点"
+required = ["caution_tone"]
+vector = { pace_fast = 1.3, control_aggressive = 1.6, caution_tone = 1.4 }
+
+[[templates]]
+text = "路况不错，速度还有点保守"
+styles = ["normal"]
+required = ["pace_slow_clear", "traffic_clear"]
+vector = { traffic_clear = 2.0, pace_slow_clear = 2.1, caution_tone = 1.0 }
+
+[[templates]]
+text = "路况挺顺，可以再果断一点"
+styles = ["normal"]
+required = ["pace_slow_clear", "traffic_clear"]
+vector = { traffic_clear = 2.0, pace_slow_clear = 2.0, caution_tone = 1.0 }
+
+[[templates]]
+text = "稳得很，乘客今天不用找扶手"
+styles = ["aggressive"]
+required = ["positive_tone"]
+forbidden = ["caution_tone"]
+vector = { control_smooth = 2.0, positive_tone = 1.2 }
+
+[[templates]]
+text = "今天手感不错，车感拿捏住了"
+styles = ["aggressive"]
+required = ["positive_tone"]
+forbidden = ["caution_tone"]
+vector = { control_stable = 1.9, positive_tone = 1.2 }
+
+[[templates]]
+text = "堵成这样，脚下居然还没乱"
+styles = ["aggressive"]
+required = ["positive_tone", "traffic_congested"]
+forbidden = ["caution_tone"]
+vector = { traffic_congested = 2.0, stable_in_pressure = 2.0, positive_tone = 1.2 }
+
+[[templates]]
+text = "巡航很稳，今天没给电门加戏"
+styles = ["aggressive"]
+required = ["positive_tone", "scene_highway"]
+forbidden = ["caution_tone"]
+vector = { scene_highway = 2.0, control_stable = 1.8, positive_tone = 1.2 }
+
+[[templates]]
+text = "一口气开这么远，后劲居然还在线"
+styles = ["aggressive"]
+required = ["positive_tone", "trip_long"]
+forbidden = ["caution_tone"]
+vector = { trip_long = 3.0, control_stable = 1.6, positive_tone = 1.2 }
+
+[[templates]]
+text = "🛣️ 连开几小时还没掉线，今天是真能打"
+styles = ["aggressive"]
+required = ["positive_tone", "trip_endurance"]
+forbidden = ["caution_tone"]
+vector = { trip_endurance = 3.4, control_stable = 1.4, positive_tone = 1.2 }
+
+[[templates]]
+text = "几百公里一口气拿下，牛逼啊🐮"
+styles = ["aggressive"]
+required = ["positive_tone", "trip_roadtrip"]
+forbidden = ["caution_tone"]
+vector = { trip_roadtrip = 3.4, control_smooth = 1.4, positive_tone = 1.2 }
+
+[[templates]]
+text = "今天像在刷山路副本，脚下居然还挺稳"
+styles = ["aggressive"]
+required = ["positive_tone", "terrain_rolling"]
+forbidden = ["caution_tone"]
+vector = { terrain_rolling = 3.2, scene_mixed = 1.0, control_stable = 1.5, positive_tone = 1.2 }
+
+[[templates]]
+text = "海拔一路上扬，你还真没上头"
+styles = ["aggressive"]
+required = ["positive_tone", "terrain_peak_finish"]
+forbidden = ["caution_tone"]
+vector = { terrain_peak_finish = 3.2, control_stable = 1.5, positive_tone = 1.2 }
+
+[[templates]]
+text = "一路往下放坡，收放居然挺稳"
+styles = ["aggressive"]
+required = ["positive_tone", "terrain_valley_finish"]
+forbidden = ["caution_tone"]
+vector = { terrain_valley_finish = 3.2, control_smooth = 1.5, positive_tone = 1.2 }
+
+[[templates]]
+text = "高低差都拉满了，你居然还稳住了"
+styles = ["aggressive"]
+required = ["positive_tone", "terrain_mountainous"]
+forbidden = ["caution_tone"]
+vector = { terrain_mountainous = 3.2, control_stable = 1.4, positive_tone = 1.2 }
+
+[[templates]]
+text = "秋名山车神附身，后段收一收"
+styles = ["aggressive"]
+required = ["caution_tone", "scene_highway"]
+vector = { scene_highway = 2.0, risk_speed_high = 2.2, pace_fast = 1.4, caution_tone = 1.4 }
+
+[[templates]]
+text = "电门戏有点多，今天太上头了吧"
+styles = ["aggressive"]
+required = ["caution_tone"]
+vector = { risk_accel_heavy = 2.1, control_aggressive = 1.5, caution_tone = 1.4 }
+
+[[templates]]
+text = "堵车已经够烦了，脚下还在加戏"
+styles = ["aggressive"]
+required = ["caution_tone", "traffic_congested"]
+vector = { traffic_congested = 2.1, control_aggressive = 1.8, caution_tone = 1.4 }
+
+[[templates]]
+text = "🛣️ 连开几小时了，后段还在上头啊"
+styles = ["aggressive"]
+required = ["caution_tone", "trip_endurance"]
+vector = { trip_endurance = 3.1, control_aggressive = 1.4, caution_tone = 1.4 }
+
+[[templates]]
+text = "📍 都开到几百公里了，脚下还在加戏啊"
+styles = ["aggressive"]
+required = ["caution_tone", "trip_roadtrip"]
+vector = { trip_roadtrip = 3.1, control_aggressive = 1.4, caution_tone = 1.4 }
+
+[[templates]]
+text = "上坡像在冲榜，电门太有戏了吧"
+styles = ["aggressive"]
+required = ["caution_tone", "terrain_uphill"]
+vector = { terrain_uphill = 3.0, control_aggressive = 1.7, caution_tone = 1.4 }
+
+[[templates]]
+text = "下坡路不少，刹车都快成主旋律了"
+styles = ["aggressive"]
+required = ["caution_tone", "terrain_downhill"]
+vector = { terrain_downhill = 3.0, risk_brake_heavy = 1.8, caution_tone = 1.4 }
+
+[[templates]]
+text = "一路起起伏伏，节奏都快开炸了"
+styles = ["aggressive"]
+required = ["caution_tone", "terrain_rolling"]
+vector = { terrain_rolling = 3.0, control_aggressive = 1.8, caution_tone = 1.4 }
+
+[[templates]]
+text = "海拔一路往上冲，电门都踩成冲榜模式了"
+styles = ["aggressive"]
+required = ["caution_tone", "terrain_peak_finish"]
+vector = { terrain_peak_finish = 3.0, control_aggressive = 1.7, caution_tone = 1.4 }
+
+[[templates]]
+text = "一路往下放坡，刹车还在一直续杯"
+styles = ["aggressive"]
+required = ["caution_tone", "terrain_valley_finish"]
+vector = { terrain_valley_finish = 3.0, risk_brake_heavy = 1.8, caution_tone = 1.4 }
+
+[[templates]]
+text = "高低差都拉满了，车都快开成过山车了"
+styles = ["aggressive"]
+required = ["caution_tone", "terrain_mountainous"]
+vector = { terrain_mountainous = 3.0, control_aggressive = 1.8, caution_tone = 1.4 }
+
+[[templates]]
+text = "路况都放行了，你还在当移动路障呢"
+styles = ["aggressive"]
+required = ["pace_slow_clear", "traffic_clear"]
+vector = { traffic_clear = 2.0, pace_slow_clear = 2.2, caution_tone = 1.1 }
+
+[[templates]]
+text = "路况都顺了，你是行走的路障吗"
+styles = ["aggressive"]
+required = ["pace_slow_clear", "traffic_clear"]
+vector = { traffic_clear = 2.0, pace_slow_clear = 2.2, caution_tone = 1.0 }
+
+[[templates]]
+text = "刹车踩得有点勤，预判是不是掉线了"
+styles = ["aggressive"]
+required = ["caution_tone", "risk_brake_heavy"]
+forbidden = ["terrain_downhill", "traffic_congested"]
+vector = { risk_brake_heavy = 2.1, caution_tone = 1.4 }
+
+[[templates]]
+text = "速度起伏有点大，乘客都要上强度了"
+styles = ["aggressive"]
+required = ["caution_tone"]
+vector = { pace_fast = 1.4, control_aggressive = 1.7, caution_tone = 1.4 }
+
+[[templates]]
+text = "路况这么通畅，还佛系巡航，节奏可以再放开些"
+styles = ["aggressive"]
+required = ["pace_slow_clear", "traffic_clear"]
+vector = { traffic_clear = 2.0, pace_slow_clear = 2.1, scene_highway = 1.2, caution_tone = 1.0 }

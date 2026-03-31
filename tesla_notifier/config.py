@@ -4,6 +4,19 @@ import os
 from dataclasses import dataclass, field
 
 
+def _normalize_driving_commentary_style(style: str | None) -> str:
+    """归一化行程点评风格。"""
+    normalized = (style or "normal").strip().lower()
+    if normalized in {"normal", "aggressive"}:
+        return normalized
+    return "normal"
+
+
+def _read_driving_commentary_style(style: str | None) -> str:
+    """读取原始行程点评风格，保留非法值供启动校验兜底。"""
+    return (style or "normal").strip().lower()
+
+
 @dataclass
 class Config:
     """应用配置"""
@@ -147,6 +160,11 @@ class Config:
     log_level: str = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").upper()
     )
+    driving_commentary_style: str = field(
+        default_factory=lambda: _read_driving_commentary_style(
+            os.getenv("DRIVING_COMMENTARY_STYLE", "normal")
+        )
+    )
 
     @property
     def db_dsn(self) -> str:
@@ -210,6 +228,11 @@ class Config:
 
         if self.mqtt_disconnect_alert_after < 30:
             errors.append("MQTT_DISCONNECT_ALERT_AFTER 建议不小于 30 秒")
+
+        if self.driving_commentary_style != _normalize_driving_commentary_style(
+            self.driving_commentary_style
+        ):
+            errors.append("DRIVING_COMMENTARY_STYLE 仅支持 normal 或 aggressive")
 
         return errors
 
