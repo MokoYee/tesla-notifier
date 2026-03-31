@@ -12,13 +12,13 @@
 
 ## 📸 推送示例
 <p align="center">
-  <a href=".github/assets/notify-overview.jpg">
-    <img src=".github/assets/notify-overview.jpg" alt="推送总览示例">
+  <a href=".github/assets/notify-featured.jpg">
+    <img src=".github/assets/notify-featured.jpg" alt="推送示例">
   </a>
 </p>
 
 <details>
-  <summary>展开查看原始截图</summary>
+  <summary>展开查看全部示例</summary>
   <table>
     <tr>
       <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="日报与行程结束示例"></td>

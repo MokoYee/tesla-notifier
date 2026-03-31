@@ -12,13 +12,13 @@ An iPhone notification companion powered by TeslaMate data, delivering trip, cha
 
 ## 📸 Notification Examples
 <p align="center">
-  <a href=".github/assets/notify-overview.jpg">
-    <img src=".github/assets/notify-overview.jpg" alt="Notification overview">
+  <a href=".github/assets/notify-featured.jpg">
+    <img src=".github/assets/notify-featured.jpg" alt="Notification examples">
   </a>
 </p>
 
 <details>
-  <summary>View original screenshots</summary>
+  <summary>View all examples</summary>
   <table>
     <tr>
       <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="Daily briefing and trip summary example"></td>
