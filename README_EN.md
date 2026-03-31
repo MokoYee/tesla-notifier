@@ -8,17 +8,28 @@
   <a href="https://github.com/MokoYee/tesla-notifier/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/MokoYee/tesla-notifier/build.yml?style=flat-square&label=CI" alt="CI"></a>
 </p>
 
-TeslaMate notification companion focused on pushes instead of a heavy backend: get trip, charging, sentry, and safety alerts on your iPhone in real time.
+An iPhone notification companion powered by TeslaMate data, delivering trip, charging, sentry, and safety alerts in real time so you can stay on top of your vehicle.
 
 ## 📸 Notification Examples
-<table>
-  <tr>
-    <td width="25%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="Daily briefing and trip summary example"></td>
-    <td width="25%"><img src=".github/assets/notify-charging-complete.jpg" alt="Charging complete example"></td>
-    <td width="25%"><img src=".github/assets/notify-charging-alerts.jpg" alt="Charging alerts example"></td>
-    <td width="25%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="Sentry notification example"></td>
-  </tr>
-</table>
+<p align="center">
+  <a href=".github/assets/notify-overview.jpg">
+    <img src=".github/assets/notify-overview.jpg" alt="Notification overview">
+  </a>
+</p>
+
+<details>
+  <summary>View original screenshots</summary>
+  <table>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="Daily briefing and trip summary example"></td>
+      <td width="50%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="Sentry notification example"></td>
+    </tr>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-charging-complete.jpg" alt="Charging complete example"></td>
+      <td width="50%"><img src=".github/assets/notify-charging-alerts.jpg" alt="Charging alerts example"></td>
+    </tr>
+  </table>
+</details>
 
 ## Features
 

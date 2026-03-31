@@ -8,17 +8,28 @@
   <a href="https://github.com/MokoYee/tesla-notifier/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/MokoYee/tesla-notifier/build.yml?style=flat-square&label=CI" alt="CI"></a>
 </p>
 
-TeslaMate 车辆状态推送插件，聚焦通知而不是重后台: 行程结束、充电完成、哨兵事件和安全提醒实时推送到 iPhone，让你随时掌握爱车动态。
+基于 TeslaMate 数据的 iPhone 通知插件，行程结束、充电完成、哨兵事件和离车安全提醒都会实时送达，让你随时掌握爱车动态。
 
 ## 📸 推送示例
-<table>
-  <tr>
-    <td width="25%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="日报与行程结束示例"></td>
-    <td width="25%"><img src=".github/assets/notify-charging-complete.jpg" alt="充电完成示例"></td>
-    <td width="25%"><img src=".github/assets/notify-charging-alerts.jpg" alt="充电异常示例"></td>
-    <td width="25%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="哨兵通知示例"></td>
-  </tr>
-</table>
+<p align="center">
+  <a href=".github/assets/notify-overview.jpg">
+    <img src=".github/assets/notify-overview.jpg" alt="推送总览示例">
+  </a>
+</p>
+
+<details>
+  <summary>展开查看原始截图</summary>
+  <table>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="日报与行程结束示例"></td>
+      <td width="50%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="哨兵通知示例"></td>
+    </tr>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-charging-complete.jpg" alt="充电完成示例"></td>
+      <td width="50%"><img src=".github/assets/notify-charging-alerts.jpg" alt="充电异常示例"></td>
+    </tr>
+  </table>
+</details>
 
 ## 功能
 
