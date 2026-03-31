@@ -249,6 +249,35 @@ def _format_charging_type_label(charge_type: str | None) -> str | None:
     return None
 
 
+def _resolve_charging_issue_profile(
+    issue_type: str,
+) -> tuple[str, str, str, str, NotificationPriority, NotificationCertainty, str]:
+    """根据异常类型返回通知文案与元数据口径。"""
+    if issue_type == "no_power":
+        return (
+            "⚡ 充电电源异常",
+            "车辆已连接，但当前未获取到供电",
+            "当前无供电",
+            "建议优先检查供电是否正常，再确认充电枪和桩端连接",
+            "high",
+            "fact",
+            "TeslaMate MQTT charging_state = NoPower",
+        )
+
+    return (
+        "⚠️ 充电提前停止",
+        "当前电量未达到设定上限，充电已提前停止",
+        "仍低于设定上限",
+        "建议查看充电桩会话或车辆状态，确认后可重新插枪继续充电",
+        "medium",
+        "analysis",
+        (
+            "TeslaMate MQTT charging_state = Stopped，"
+            "且车辆仍保持插枪、当前 SoC 低于设定上限至少阈值"
+        ),
+    )
+
+
 def _normalize_event_part(part: object) -> str:
     """将事件 ID 片段规范化为稳定的短字符串。"""
     normalized = re.sub(r"[^a-z0-9]+", "-", str(part).strip().lower())
@@ -1057,16 +1086,9 @@ async def send_charging_issue_alert(
     session_tag: str | None = None,
 ) -> bool:
     """发送充电异常提醒"""
-    if issue_type == "no_power":
-        title = "⚡ 充电电源异常"
-        summary = "车辆已连接，但当前未获取到供电"
-        subtitle = "当前无供电"
-        priority: NotificationPriority = "high"
-    else:
-        title = "⚠️ 充电意外停止"
-        summary = "当前电量未达到设定上限，充电提前结束"
-        subtitle = "未达到设定上限"
-        priority = "medium"
+    title, summary, subtitle, suggestion, priority, certainty, reason = (
+        _resolve_charging_issue_profile(issue_type)
+    )
 
     lines = [
         f"🕐 {_current_local_time()}",
@@ -1094,7 +1116,7 @@ async def send_charging_issue_alert(
         lines.append(f"🔗 充电连接 {plugged_in_text}")
 
     lines.append("")
-    lines.append("建议检查电源、充电桩或车辆状态")
+    lines.append(suggestion)
 
     return await send_notification(
         BarkOptions(
@@ -1110,12 +1132,9 @@ async def send_charging_issue_alert(
                     issue_type,
                     session_tag or _current_local_token(),
                 ),
-                certainty="fact",
+                certainty=certainty,
                 priority=priority,
-                reason=(
-                    "TeslaMate MQTT charging_state 命中异常状态，"
-                    "例如 NoPower 或 Stopped 且 SoC 未达到目标"
-                ),
+                reason=reason,
             ),
         )
     )

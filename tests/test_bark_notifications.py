@@ -88,3 +88,81 @@ def test_send_sentry_recording_includes_rated_range(
 
     assert sent is True
     assert "🔋 电量 81% · 463 km" in captured["body"]
+
+
+def test_send_charging_issue_alert_marks_no_power_as_fact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NoPower 应被视为直接状态信号，而不是规则推断。"""
+    captured: dict[str, object] = {}
+
+    async def fake_send_notification(options: bark.BarkOptions) -> bool:
+        captured["title"] = options.title
+        captured["subtitle"] = options.subtitle
+        captured["body"] = options.body
+        captured["meta"] = options.meta
+        return True
+
+    monkeypatch.setattr(bark, "send_notification", fake_send_notification)
+
+    sent = asyncio.run(
+        bark.send_charging_issue_alert(
+            issue_type="no_power",
+            location="上海市闵行区",
+            battery_level=46,
+            charge_limit_soc=80,
+            charger_power=0.0,
+            plugged_in=True,
+            session_tag="20260331153000",
+        )
+    )
+
+    assert sent is True
+    assert captured["title"] == "⚡ 充电电源异常"
+    assert captured["subtitle"] == "当前无供电"
+    assert "车辆已连接，但当前未获取到供电" in str(captured["body"])
+    assert "建议优先检查供电是否正常，再确认充电枪和桩端连接" in str(captured["body"])
+    meta = captured["meta"]
+    assert isinstance(meta, bark.NotificationMeta)
+    assert meta.certainty == "fact"
+    assert meta.reason == "TeslaMate MQTT charging_state = NoPower"
+
+
+def test_send_charging_issue_alert_marks_stopped_early_as_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stopped 未达目标应按规则推断展示，避免包装成明确故障。"""
+    captured: dict[str, object] = {}
+
+    async def fake_send_notification(options: bark.BarkOptions) -> bool:
+        captured["title"] = options.title
+        captured["subtitle"] = options.subtitle
+        captured["body"] = options.body
+        captured["meta"] = options.meta
+        return True
+
+    monkeypatch.setattr(bark, "send_notification", fake_send_notification)
+
+    sent = asyncio.run(
+        bark.send_charging_issue_alert(
+            issue_type="stopped_early",
+            location="上海市闵行区",
+            battery_level=57,
+            charge_limit_soc=80,
+            charger_power=0.0,
+            plugged_in=True,
+            session_tag="20260331153100",
+        )
+    )
+
+    assert sent is True
+    assert captured["title"] == "⚠️ 充电提前停止"
+    assert captured["subtitle"] == "仍低于设定上限"
+    assert "当前电量未达到设定上限，充电已提前停止" in str(captured["body"])
+    assert "建议查看充电桩会话或车辆状态，确认后可重新插枪继续充电" in str(
+        captured["body"]
+    )
+    meta = captured["meta"]
+    assert isinstance(meta, bark.NotificationMeta)
+    assert meta.certainty == "analysis"
+    assert "charging_state = Stopped" in (meta.reason or "")
