@@ -100,7 +100,7 @@ Replace `teslamate_default` in the standalone template with the actual network n
 
 ## Configuration
 
-- See [docs/environment.md](docs/environment.md) for the full environment variable reference
+- See [docs/environment_en.md](docs/environment_en.md) for the full environment variable reference
 - Common optional features: `AMAP_KEY`, `CAIYUN_TOKEN`, `SENTRY_NOTIFY_ENABLED`, `DEPARTURE_SAFETY_NOTIFY_ENABLED`, `TPMS_NOTIFY_ENABLED`, `CHARGING_ISSUE_NOTIFY_ENABLED`
 - Weak-network trip compensation, system health notifications, and push state persistence under `./data` are enabled by default and usually do not need extra setup
 
