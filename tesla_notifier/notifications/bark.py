@@ -178,6 +178,77 @@ def _format_trip_actions(
     return f"📌 驾驶动作 · 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次"
 
 
+def _format_trip_traffic_summary(
+    traffic_summary: str | None,
+    traffic_label: str | None,
+) -> str | None:
+    """清洗路况摘要里的内部统计词，避免直接暴露采样口径。"""
+    if not traffic_summary or not traffic_summary.strip():
+        return None
+
+    cleaned = re.sub(r"(?:^|[，,]\s*)采样\s*\d+\s*次(?:\s*[，,]|$)", "，", traffic_summary)
+    cleaned = re.sub(
+        r"(?:^|[，,]\s*)压力指数\s*\d+(?:\.\d+)?(?:\s*[，,]|$)",
+        "，",
+        cleaned,
+    )
+    cleaned = re.sub(r"\s*[,，]\s*", "，", cleaned)
+    cleaned = re.sub(r"，{2,}", "，", cleaned).strip("，, ")
+
+    if cleaned:
+        return cleaned
+
+    if traffic_label and traffic_label.strip():
+        return traffic_label.strip()
+
+    return None
+
+
+def _build_trip_analysis_lines(
+    hard_accel_count: int | None,
+    hard_brake_count: int | None,
+    driving_score: int | None,
+    driving_label: str | None,
+    road_context: str | None,
+    trip_commentary: str | None,
+    traffic_label: str | None,
+    traffic_summary: str | None,
+) -> list[str]:
+    """按用户可读顺序组织行程分析区块。"""
+    lines: list[str] = []
+
+    if driving_score is not None and driving_label is not None:
+        lines.append(_format_trip_score(driving_score, driving_label))
+
+    if trip_commentary:
+        lines.append(f"🧠 行程点评 · {trip_commentary}")
+
+    if hard_accel_count is not None and hard_brake_count is not None:
+        lines.append(_format_trip_actions(hard_accel_count, hard_brake_count))
+
+    formatted_traffic_summary = _format_trip_traffic_summary(traffic_summary, traffic_label)
+    scene_parts = []
+    if road_context:
+        scene_parts.append(road_context)
+    if formatted_traffic_summary:
+        scene_parts.append(formatted_traffic_summary)
+    elif traffic_label:
+        scene_parts.append(traffic_label)
+    if scene_parts:
+        lines.append(f"🧭 行驶场景 · {' · '.join(scene_parts)}")
+
+    return lines
+
+
+def _format_charging_type_label(charge_type: str | None) -> str | None:
+    """格式化充电类型标签。"""
+    if charge_type == "DC":
+        return "DC 快充"
+    if charge_type == "AC":
+        return "AC 慢充"
+    return None
+
+
 def _normalize_event_part(part: object) -> str:
     """将事件 ID 片段规范化为稳定的短字符串。"""
     normalized = re.sub(r"[^a-z0-9]+", "-", str(part).strip().lower())
@@ -380,7 +451,7 @@ async def send_trip_end(
     driving_score: int | None = None,
     driving_label: str | None = None,
     road_context: str | None = None,
-    analysis_summary: str | None = None,
+    trip_commentary: str | None = None,
     traffic_label: str | None = None,
     traffic_summary: str | None = None,
     speed_avg: float | None = None,
@@ -437,38 +508,19 @@ async def send_trip_end(
     if odometer is not None:
         lines.append(f"🛣️ 总里程 {odometer:.1f} km")
 
-    if (
-        hard_accel_count is not None
-        and hard_brake_count is not None
-        and driving_score is not None
-        and driving_label is not None
-    ):
+    analysis_lines = _build_trip_analysis_lines(
+        hard_accel_count=hard_accel_count,
+        hard_brake_count=hard_brake_count,
+        driving_score=driving_score,
+        driving_label=driving_label,
+        road_context=road_context,
+        trip_commentary=trip_commentary,
+        traffic_label=traffic_label,
+        traffic_summary=traffic_summary,
+    )
+    if analysis_lines:
         lines.append("")
-        if analysis_summary:
-            lines.append(f"🧠 行程点评 · {analysis_summary}")
-        lines.append(_format_trip_score(driving_score, driving_label))
-        scene_parts = []
-        if road_context:
-            scene_parts.append(road_context)
-        if traffic_label:
-            scene_parts.append(traffic_label)
-        if scene_parts:
-            lines.append(f"🧭 行驶场景 · {' · '.join(scene_parts)}")
-        lines.append(_format_trip_actions(hard_accel_count, hard_brake_count))
-
-    elif traffic_label:
-        lines.append(f"🧭 行驶场景 · {traffic_label}")
-
-    if traffic_summary:
-        lines.append(f"🚦 沿途路况 · {traffic_summary}")
-
-    if analysis_summary and (
-        hard_accel_count is None
-        or hard_brake_count is None
-        or driving_score is None
-        or driving_label is None
-    ):
-        lines.append(f"🧠 行程点评 · {analysis_summary}")
+        lines.extend(analysis_lines)
 
     return await send_notification(
         BarkOptions(
@@ -502,6 +554,8 @@ async def send_charging_complete(
     peak_power: float,
     start_range: float,
     end_range: float,
+    charge_type: str | None = None,
+    charging_efficiency: float | None = None,
     outside_temp: float | None = None,
     cost: float | None = None,
     charging_id: int | None = None,
@@ -515,14 +569,26 @@ async def send_charging_complete(
         f"📍 {location}",
         f"🕐 {_format_time(start_time)} - {_format_time(end_time)}（{_format_duration(duration)}）",
         "",
-        f"🔋 SoC {start_soc}% → {end_soc}%（+{end_soc - start_soc}%）",
-        f"⚡ 充入 {energy_added:.1f} kWh",
-        f"📊 峰值功率 {peak_power:.0f} kW",
-        f"📱 表显 {start_range:.0f} → {end_range:.0f} km",
     ]
 
     if outside_temp is not None:
         lines.append(f"🌡️ 室外 {outside_temp:.1f}°C")
+
+    charging_summary_parts: list[str] = []
+    charge_type_label = _format_charging_type_label(charge_type)
+    if charge_type_label:
+        charging_summary_parts.append(charge_type_label)
+    if charging_efficiency is not None:
+        charging_summary_parts.append(f"充电效率 {charging_efficiency:.0f}%")
+    if charging_summary_parts:
+        lines.append(f"🔌 {' · '.join(charging_summary_parts)}")
+
+    lines.extend([
+        f"🔋 SoC {start_soc}% → {end_soc}%（+{end_soc - start_soc}%）",
+        f"📱 表显 {start_range:.0f} → {end_range:.0f} km",
+        f"⚡ 充入 {energy_added:.1f} kWh",
+        f"📊 峰值功率 {peak_power:.0f} kW",
+    ])
 
     if cost is not None:
         lines.append(f"💰 费用 ¥{cost:.2f}")
@@ -818,6 +884,7 @@ async def send_sentry_deactivated(
 async def send_sentry_recording(
     location: str | None = None,
     battery_level: int | None = None,
+    rated_range_km: float | None = None,
     recording_count: int = 0,
     session_tag: str | None = None,
 ) -> bool:
@@ -833,8 +900,9 @@ async def send_sentry_recording(
     if location:
         lines.append(f"📍 {location}")
 
-    if battery_level is not None:
-        lines.append(f"🔋 电量 {battery_level}%")
+    battery_line = _format_battery_with_range("电量", battery_level, rated_range_km)
+    if battery_line:
+        lines.append(battery_line)
 
     lines.extend([
         "",

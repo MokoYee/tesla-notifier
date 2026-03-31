@@ -150,7 +150,7 @@ async def _send_trip_notification(
         driving_score=score.score if score else None,
         driving_label=score.label if score else None,
         road_context=score.road_context if score else None,
-        analysis_summary=score.analysis_summary if score else None,
+        trip_commentary=score.trip_commentary if score else None,
         traffic_label=score.traffic_label if score else None,
         traffic_summary=score.traffic_summary if score else None,
         speed_avg=trip.speed_avg,
@@ -521,6 +521,8 @@ async def handle_charging_complete() -> None:
                 end_soc=charging.end_battery_level,
                 energy_added=charging.charge_energy_added,
                 peak_power=charging.charger_power_max,
+                charge_type=charging.charge_type,
+                charging_efficiency=charging.charging_efficiency,
                 start_range=charging.start_rated_range_km,
                 end_range=charging.end_rated_range_km,
                 outside_temp=charging.outside_temp_avg,
@@ -746,6 +748,7 @@ async def handle_sentry_recording() -> None:
         # 获取位置和电量信息
         location = await mqtt_handler.get_location_str() if mqtt_handler else None
         battery_level = mqtt_handler.vehicle_state.battery_level if mqtt_handler else None
+        rated_range_km = mqtt_handler.vehicle_state.rated_range_km if mqtt_handler else None
         recording_count = (
             mqtt_handler.vehicle_state.sentry_recording_count if mqtt_handler else 0
         )
@@ -753,6 +756,7 @@ async def handle_sentry_recording() -> None:
         success = await bark.send_sentry_recording(
             location=location,
             battery_level=battery_level,
+            rated_range_km=rated_range_km,
             recording_count=recording_count,
             session_tag=_format_datetime_tag(
                 mqtt_handler.vehicle_state.last_sentry_event_time if mqtt_handler else None
