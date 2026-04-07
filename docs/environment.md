@@ -87,11 +87,13 @@
 | `SENTRY_NOTIFY_ENABLED` | `OFF` | 否 | 是否开启哨兵录制事件通知 |
 | `SENTRY_RECORDING_COOLDOWN` | `300` | 否 | 哨兵录制事件防抖秒数 |
 | `DEPARTURE_SAFETY_NOTIFY_ENABLED` | `OFF` | 否 | 是否开启离车安全提醒 |
-| `DEPARTURE_SAFETY_DELAY` | `45` | 否 | 检测到离车后延迟多少秒执行安全检查 |
+| `DEPARTURE_SAFETY_DELAY` | `180` | 否 | 检测到离车后延迟多少秒执行安全检查，默认拉长到 3 分钟以降低搬东西、插枪等短暂停留场景的误报 |
+| `DEPARTURE_SAFETY_COOLDOWN` | `600` | 否 | 离车安全提醒冷却秒数，避免 `is_user_present` 抖动时短时间重复提醒 |
 | `TPMS_NOTIFY_ENABLED` | `OFF` | 否 | 是否开启胎压异常提醒 |
 | `TPMS_NOTIFY_COOLDOWN` | `1800` | 否 | 胎压异常防抖秒数 |
 | `CHARGING_ISSUE_NOTIFY_ENABLED` | `OFF` | 否 | 是否开启充电异常提醒 |
 | `CHARGING_ISSUE_COOLDOWN` | `900` | 否 | 充电异常防抖秒数 |
+| `CHARGING_NO_POWER_GRACE_PERIOD` | `180` | 否 | 插枪后 `NoPower` 的冷却确认秒数；若 3 分钟内进入 `Starting/Charging`，则不发送无供电异常 |
 | `CHARGING_STOPPED_MIN_SOC_GAP` | `3` | 否 | 当充电变为 `Stopped` 且距离目标 SoC 仍大于该值时，判定为异常停止 |
 
 ## 系统健康通知
@@ -154,6 +156,8 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 ## 说明
 
 - 哨兵录制事件基于 TeslaMate MQTT 实时状态判断，并使用 `SENTRY_RECORDING_COOLDOWN` 防重复推送。
+- 离车安全提醒默认会等待 180 秒再检查，并在 600 秒冷却窗口内抑制重复提醒，更适合下车后仍在后备箱取物、插枪等短暂停留场景。
+- 充电异常中的 `NoPower` 默认会等待 180 秒确认，过滤慢充刚插枪时的短暂无供电握手阶段。
 - 如果你只想用实时通知，可以保留 `ENABLE_MQTT=true`，并按需关闭 `ENABLE_CRON`。
 - 行程路况分析使用本地 JSON 缓存，不会额外引入数据库；缓存目录默认为 `./data/traffic_snapshots/`。
 - `DRIVING_COMMENTARY_STYLE` 默认为 `normal`，未写入 `.env.example`；只有显式配置时才会切到更敢说的 `aggressive` 风格。

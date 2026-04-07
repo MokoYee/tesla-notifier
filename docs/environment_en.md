@@ -88,11 +88,13 @@ You can start from [`.env.example`](../.env.example) or use [`docker-compose.yml
 | `SENTRY_NOTIFY_ENABLED` | `OFF` | No | Whether to enable sentry recording event notifications |
 | `SENTRY_RECORDING_COOLDOWN` | `300` | No | Cooldown for sentry recording notifications, in seconds |
 | `DEPARTURE_SAFETY_NOTIFY_ENABLED` | `OFF` | No | Whether to enable departure safety alerts |
-| `DEPARTURE_SAFETY_DELAY` | `45` | No | Delay before running the departure safety check, in seconds |
+| `DEPARTURE_SAFETY_DELAY` | `180` | No | Delay before running the departure safety check, in seconds. The default is stretched to 3 minutes to reduce false alerts while unloading items or plugging in |
+| `DEPARTURE_SAFETY_COOLDOWN` | `600` | No | Cooldown for departure safety alerts, in seconds, to suppress repeated alerts when `is_user_present` bounces |
 | `TPMS_NOTIFY_ENABLED` | `OFF` | No | Whether to enable tire pressure alerts |
 | `TPMS_NOTIFY_COOLDOWN` | `1800` | No | Cooldown for tire pressure alerts, in seconds |
 | `CHARGING_ISSUE_NOTIFY_ENABLED` | `OFF` | No | Whether to enable charging issue alerts |
 | `CHARGING_ISSUE_COOLDOWN` | `900` | No | Cooldown for charging issue alerts, in seconds |
+| `CHARGING_NO_POWER_GRACE_PERIOD` | `180` | No | Grace period for `NoPower` after plugging in. If charging reaches `Starting/Charging` within 3 minutes, the no-power alert is suppressed |
 | `CHARGING_STOPPED_MIN_SOC_GAP` | `3` | No | When charging changes to `Stopped` and the target SoC is still farther away than this gap, it is treated as an abnormal stop |
 
 ## System Health Notifications
@@ -155,6 +157,8 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 ## Notes
 
 - Sentry recording notifications are based on TeslaMate MQTT realtime state and use `SENTRY_RECORDING_COOLDOWN` to prevent duplicates.
+- Departure safety alerts now wait 180 seconds by default and apply a 600-second cooldown window, which is better suited to short stays around the vehicle while unloading items or plugging in.
+- `NoPower` charging alerts now wait 180 seconds by default to filter out short handshake phases right after an AC charging cable is plugged in.
 - If you only want realtime notifications, keep `ENABLE_MQTT=true` and disable `ENABLE_CRON` as needed.
 - Trip traffic analysis uses a local JSON cache and does not introduce any extra database dependency. The default cache directory is `./data/traffic_snapshots/`.
 - `DRIVING_COMMENTARY_STYLE` defaults to `normal` and is intentionally not added to `.env.example`; only set it explicitly if you want the more outspoken `aggressive` style.

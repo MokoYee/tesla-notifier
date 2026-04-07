@@ -938,6 +938,10 @@ async def run() -> None:
     logger.debug(f"  DEPARTURE_SAFETY_NOTIFY_ENABLED: 离车安全{departure_status}")
     if config.departure_safety_notify_enabled:
         logger.debug(f"  DEPARTURE_SAFETY_DELAY: {config.departure_safety_delay}s")
+        logger.debug(
+            "  DEPARTURE_SAFETY_COOLDOWN: "
+            f"{config.departure_safety_cooldown}s"
+        )
     tpms_status = "(已开启)" if config.tpms_notify_enabled else "(已关闭)"
     logger.debug(f"  TPMS_NOTIFY_ENABLED: 胎压异常{tpms_status}")
     if config.tpms_notify_enabled:
@@ -949,6 +953,10 @@ async def run() -> None:
     if config.charging_issue_notify_enabled:
         logger.debug(
             f"  CHARGING_ISSUE_COOLDOWN: {config.charging_issue_cooldown}s"
+        )
+        logger.debug(
+            "  CHARGING_NO_POWER_GRACE_PERIOD: "
+            f"{config.charging_no_power_grace_period}s"
         )
         logger.debug(
             "  CHARGING_STOPPED_MIN_SOC_GAP: "

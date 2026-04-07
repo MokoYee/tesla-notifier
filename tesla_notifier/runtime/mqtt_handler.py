@@ -76,14 +76,17 @@ class VehicleState:
     initialized_topics: set[str] = field(default_factory=set)
     departure_check_session_id: int = 0
     departure_alert_sent: bool = False
+    departure_last_alert_time: datetime | None = None
     last_tire_alert_time: datetime | None = None
     pending_charging_issue: bool = False
     active_charging_issue: str | None = None
     last_charging_issue_key: str | None = None
     last_charging_issue_time: datetime | None = None
+    plugged_in_since: datetime | None = None
     charging_state_version: int = 0
     charging_session_had_active_charge: bool = False
     charging_stop_pending_confirmation: bool = False
+    charging_no_power_pending_confirmation: bool = False
     drive_state_version: int = 0
 
 
@@ -304,6 +307,8 @@ class MqttHandler:
 
         is_initial = self._mark_initialized("charging_state")
         if payload == "Charging":
+            if self.vehicle_state.plugged_in_since is None:
+                self.vehicle_state.plugged_in_since = datetime.now()
             self.vehicle_state.charging_session_had_active_charge = True
             self.vehicle_state.charging_stop_pending_confirmation = False
             self._reset_charging_issue_state()
@@ -311,13 +316,31 @@ class MqttHandler:
 
         if payload == "Starting":
             self.vehicle_state.charging_stop_pending_confirmation = False
+            self.vehicle_state.charging_no_power_pending_confirmation = False
             return
 
         if payload == "NoPower":
             if not is_initial:
                 self.vehicle_state.charging_stop_pending_confirmation = False
-                self.vehicle_state.pending_charging_issue = True
-                self._maybe_emit_charging_issue()
+                if self.vehicle_state.charging_no_power_pending_confirmation:
+                    logger.debug("NoPower 冷却确认已在进行中，跳过重复调度")
+                    return
+
+                confirm_delay = self._get_no_power_confirmation_delay()
+                if confirm_delay > 0:
+                    logger.info(
+                        "检测到 NoPower，进入插枪冷却确认窗口: "
+                        f"{confirm_delay:.0f}s"
+                    )
+                    self.vehicle_state.pending_charging_issue = False
+                    self.vehicle_state.charging_no_power_pending_confirmation = True
+                    self._schedule_charging_no_power_confirmation(
+                        state_version,
+                        confirm_delay,
+                    )
+                else:
+                    self.vehicle_state.pending_charging_issue = True
+                    self._maybe_emit_charging_issue()
             return
 
         if payload == "Disconnected":
@@ -335,6 +358,7 @@ class MqttHandler:
                 self.vehicle_state.charging_session_had_active_charge = False
                 self.vehicle_state.charging_stop_pending_confirmation = False
 
+            self.vehicle_state.plugged_in_since = None
             self._reset_charging_issue_state()
             return
 
@@ -531,9 +555,18 @@ class MqttHandler:
 
     def _handle_plugged_in(self, payload: str) -> None:
         """处理插枪状态更新"""
-        _, current_value, _ = self._update_bool_state("plugged_in", "plugged_in", payload)
+        prev_value, current_value, _ = self._update_bool_state(
+            "plugged_in",
+            "plugged_in",
+            payload,
+        )
         if current_value is None:
             return
+
+        if current_value is True and prev_value is not True:
+            self.vehicle_state.plugged_in_since = datetime.now()
+        elif current_value is False:
+            self.vehicle_state.plugged_in_since = None
 
         if current_value is False and self.vehicle_state.charging_state == "Stopped":
             if (
@@ -675,7 +708,23 @@ class MqttHandler:
         self.vehicle_state.last_charging_issue_key = issue_key
         self.vehicle_state.last_charging_issue_time = now
         self.vehicle_state.pending_charging_issue = False
+        self.vehicle_state.charging_no_power_pending_confirmation = False
         self._schedule_callback(self.on_charging_issue_alert)
+
+    def _get_no_power_confirmation_delay(self) -> float:
+        """根据插枪时长决定 NoPower 的确认窗口。"""
+        if self.vehicle_state.charging_session_had_active_charge:
+            return 0.0
+
+        grace_period = max(float(config.charging_no_power_grace_period), 0.0)
+        if grace_period <= 0:
+            return 0.0
+
+        if self.vehicle_state.plugged_in_since is None:
+            return grace_period
+
+        elapsed = (datetime.now() - self.vehicle_state.plugged_in_since).total_seconds()
+        return max(0.0, grace_period - elapsed)
 
     def _should_treat_stopped_as_complete(self) -> bool:
         """判断 Stopped 是否更应视为正常结束而非异常。"""
@@ -709,6 +758,7 @@ class MqttHandler:
         """在充电恢复正常后清空异常状态。"""
         self.vehicle_state.pending_charging_issue = False
         self.vehicle_state.active_charging_issue = None
+        self.vehicle_state.charging_no_power_pending_confirmation = False
         if reset_cooldown:
             self.vehicle_state.last_charging_issue_key = None
             self.vehicle_state.last_charging_issue_time = None
@@ -728,6 +778,23 @@ class MqttHandler:
         logger.info("将在 10 秒后触发充电完成处理")
         asyncio.run_coroutine_threadsafe(
             self._delayed_charging_complete(),
+            self._loop,
+        )
+
+    def _schedule_charging_no_power_confirmation(
+        self,
+        expected_state_version: int,
+        delay_seconds: float,
+    ) -> None:
+        """延迟确认 NoPower，过滤插枪握手阶段的短暂无供电。"""
+        if not self._loop:
+            return
+
+        asyncio.run_coroutine_threadsafe(
+            self._delayed_charging_no_power_confirmation(
+                expected_state_version,
+                delay_seconds,
+            ),
             self._loop,
         )
 
@@ -863,12 +930,22 @@ class MqttHandler:
         if self.vehicle_state.departure_alert_sent:
             return
 
+        now = datetime.now()
+        if (
+            self.vehicle_state.departure_last_alert_time is not None
+            and (now - self.vehicle_state.departure_last_alert_time).total_seconds()
+            <= config.departure_safety_cooldown
+        ):
+            logger.info("离车安全提醒仍在冷却窗口内，跳过推送")
+            return
+
         issues = self.get_departure_safety_issues()
         if not issues:
             logger.info("离车安全检查通过，无需推送")
             return
 
         self.vehicle_state.departure_alert_sent = True
+        self.vehicle_state.departure_last_alert_time = now
         if config.departure_safety_notify_enabled and self.on_departure_safety_alert:
             await self.on_departure_safety_alert()
         else:
@@ -953,6 +1030,32 @@ class MqttHandler:
         logger.info("离线补偿窗口结束，开始执行行程补偿检查")
         if self.on_trip_offline_reconcile:
             await self.on_trip_offline_reconcile()
+
+    async def _delayed_charging_no_power_confirmation(
+        self,
+        expected_state_version: int,
+        delay_seconds: float,
+    ) -> None:
+        """延迟确认 NoPower，避免把插枪初期握手抖动误报为异常。"""
+        logger.debug(f"等待 {delay_seconds:.0f} 秒确认 NoPower 是否持续...")
+        await asyncio.sleep(delay_seconds)
+
+        if self.vehicle_state.charging_state_version != expected_state_version:
+            logger.debug("充电状态已变化，取消本次 NoPower 确认")
+            return
+
+        if not self.vehicle_state.charging_no_power_pending_confirmation:
+            logger.debug("当前无待确认的 NoPower 事件，跳过确认")
+            return
+
+        if self.vehicle_state.charging_state != "NoPower":
+            logger.debug("充电状态已不再是 NoPower，跳过异常确认")
+            return
+
+        logger.info("NoPower 冷却窗口结束，确认仍未恢复，按充电异常处理")
+        self.vehicle_state.charging_no_power_pending_confirmation = False
+        self.vehicle_state.pending_charging_issue = True
+        self._maybe_emit_charging_issue()
 
     async def _delayed_charging_stopped_confirmation(self, expected_state_version: int) -> None:
         """延迟确认 Stopped，避免把刚插枪和主动停充误判为异常。"""

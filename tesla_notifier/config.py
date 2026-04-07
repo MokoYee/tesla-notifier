@@ -111,7 +111,10 @@ class Config:
         == "ON"
     )
     departure_safety_delay: int = field(
-        default_factory=lambda: int(os.getenv("DEPARTURE_SAFETY_DELAY", "45"))
+        default_factory=lambda: int(os.getenv("DEPARTURE_SAFETY_DELAY", "180"))
+    )
+    departure_safety_cooldown: int = field(
+        default_factory=lambda: int(os.getenv("DEPARTURE_SAFETY_COOLDOWN", "600"))
     )
 
     # 胎压提醒
@@ -131,6 +134,11 @@ class Config:
     )
     charging_issue_cooldown: int = field(
         default_factory=lambda: int(os.getenv("CHARGING_ISSUE_COOLDOWN", "900"))
+    )
+    charging_no_power_grace_period: int = field(
+        default_factory=lambda: int(
+            os.getenv("CHARGING_NO_POWER_GRACE_PERIOD", "180")
+        )
     )
     charging_stopped_min_soc_gap: int = field(
         default_factory=lambda: int(os.getenv("CHARGING_STOPPED_MIN_SOC_GAP", "3"))
@@ -222,6 +230,15 @@ class Config:
 
         if self.trip_compensation_max_age_hours < 1:
             errors.append("TRIP_COMPENSATION_MAX_AGE_HOURS 必须大于等于 1")
+
+        if self.departure_safety_delay < 30:
+            errors.append("DEPARTURE_SAFETY_DELAY 建议不小于 30 秒")
+
+        if self.departure_safety_cooldown < 60:
+            errors.append("DEPARTURE_SAFETY_COOLDOWN 建议不小于 60 秒")
+
+        if self.charging_no_power_grace_period < 30:
+            errors.append("CHARGING_NO_POWER_GRACE_PERIOD 建议不小于 30 秒")
 
         if self.db_failure_alert_threshold < 1:
             errors.append("DB_FAILURE_ALERT_THRESHOLD 必须大于等于 1")
