@@ -50,8 +50,7 @@ You can start from [`.env.example`](../.env.example) or use [`docker-compose.yml
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
-| `CAIYUN_TOKEN` | empty | No | Caiyun Weather token for richer weather data |
-| `AMAP_KEY` | empty | No | Amap key used for better Chinese address resolution |
+| `AMAP_KEY` | empty | No | Amap key used for Chinese address resolution, daily briefing weather, and optional traffic analysis |
 
 ## Trip Traffic Analysis
 

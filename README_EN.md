@@ -112,21 +112,20 @@ Replace `teslamate_default` in the standalone template with the actual network n
 ## Configuration
 
 - See [docs/environment_en.md](docs/environment_en.md) for the full environment variable reference
-- Common optional features: `AMAP_KEY`, `CAIYUN_TOKEN`, `SENTRY_NOTIFY_ENABLED`, `DEPARTURE_SAFETY_NOTIFY_ENABLED`, `TPMS_NOTIFY_ENABLED`, `CHARGING_ISSUE_NOTIFY_ENABLED`
+- Common optional features: `AMAP_KEY`, `SENTRY_NOTIFY_ENABLED`, `DEPARTURE_SAFETY_NOTIFY_ENABLED`, `TPMS_NOTIFY_ENABLED`, `CHARGING_ISSUE_NOTIFY_ENABLED`
 - Weak-network trip compensation, system health notifications, and push state persistence under `./data` are enabled by default and usually do not need extra setup
 
 ## Weather Services
 
-- **Caiyun Weather** (Recommended for China) - Configure `CAIYUN_TOKEN` for air quality, UV index, etc.
-  - [Get Token](https://platform.caiyunapp.com/)
-  - [API Docs](https://docs.caiyunapp.com/weather-api/v2/v2.6/1-realtime.html)
-- **Open-Meteo** (Fallback) - Free, no configuration needed, auto-fallback when Caiyun fails
+- **Amap Weather** - Configure `AMAP_KEY` to use Chinese weather data based on the current administrative district
+- **Open-Meteo** (Fallback) - Free, no configuration needed, auto-fallback when Amap weather is unavailable
 
 ## Amap Services
 
 Configure `AMAP_KEY` to enable:
 
 - Reverse geocoding for better Chinese addresses
+- Weather lookup for daily briefings
 - Traffic-aware trip analysis by sampling Amap traffic status during a drive
 
 **Setup:**
@@ -138,6 +137,7 @@ Configure `AMAP_KEY` to enable:
 
 **Reference:**
 - [Reverse Geocoding API](https://lbs.amap.com/api/webservice/guide/api/georegeo)
+- [Weather API](https://lbs.amap.com/api/webservice/guide/api/weatherinfo)
 - [Traffic Status API](https://lbs.amap.com/api/webservice/guide/api-advanced/traffic-situation-inquiry)
 
 > Note: reverse geocoding is a normal Web Service capability, while traffic status is documented by Amap as an advanced service. If your key has no access, Tesla Notifier will automatically fall back to trip pushes without traffic enhancement.

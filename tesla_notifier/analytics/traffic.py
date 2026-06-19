@@ -8,10 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from tesla_notifier.config import config
-from tesla_notifier.integrations.amap import wgs84_to_gcj02
+from tesla_notifier.integrations.amap import amap_request_json, wgs84_to_gcj02
 from tesla_notifier.logger import setup_logger
 
 logger = setup_logger("traffic")
@@ -21,6 +19,8 @@ DEFAULT_TRAFFIC_CACHE_DIR = Path("./data/traffic_snapshots")
 TRAFFIC_REQUEST_TIMEOUT = 8.0
 TRAFFIC_LOOP_POLL_SECONDS = 30
 ACTIVE_SESSION_TTL = timedelta(hours=12)
+TRAFFIC_FAILURE_DISABLE_THRESHOLD = 3
+TRAFFIC_FAILURE_COOLDOWN = timedelta(minutes=15)
 
 
 @dataclass
@@ -55,14 +55,27 @@ class TrafficSummary:
 
 
 @dataclass
+class TrafficFetchResult:
+    """交通态势接口调用结果，保留失败原因供退避和熔断使用。"""
+
+    snapshot: TrafficSnapshot | None = None
+    failure_reason: str | None = None
+    cooldown_until: str | None = None
+
+
+@dataclass
 class TrafficSession:
     """正在进行中的行程交通采样会话"""
 
     session_id: str
     started_at: str
+    last_attempt_at: str | None = None
     last_sample_at: str | None = None
     last_sample_latitude: float | None = None
     last_sample_longitude: float | None = None
+    consecutive_failures: int = 0
+    traffic_disabled_reason: str | None = None
+    traffic_cooldown_until: str | None = None
     samples: list[TrafficSnapshot] = field(default_factory=list)
 
 
@@ -224,20 +237,47 @@ class TrafficSampler:
 
             latitude, longitude = self._latest_position
             now = datetime.now(tz=UTC)
+            if session.traffic_disabled_reason:
+                return
+            if session.traffic_cooldown_until:
+                cooldown_until = _parse_datetime(session.traffic_cooldown_until)
+                if cooldown_until is not None and now < cooldown_until:
+                    return
+            if force and _has_recent_failed_attempt(session, now):
+                return
             if not force and not self._should_capture(session, now, latitude, longitude):
                 return
 
             session_id = session.session_id
+            session.last_attempt_at = now.isoformat()
             self._sampling_inflight = True
+            self._write_session_file(session, phase="active")
 
-        snapshot = await fetch_traffic_snapshot(latitude, longitude)
+        result = await fetch_traffic_snapshot(latitude, longitude)
 
         async with self._lock:
             self._sampling_inflight = False
             session = self._active_session
-            if session is None or session.session_id != session_id or snapshot is None:
+            if session is None or session.session_id != session_id:
                 return
 
+            snapshot = result.snapshot
+            if snapshot is None:
+                session.consecutive_failures += 1
+                if result.cooldown_until is not None:
+                    session.traffic_cooldown_until = result.cooldown_until
+                if session.consecutive_failures >= TRAFFIC_FAILURE_DISABLE_THRESHOLD:
+                    reason = result.failure_reason or "连续请求失败"
+                    session.traffic_disabled_reason = reason
+                    logger.warning(
+                        "本次行程停止路况增强: "
+                        f"连续失败 {session.consecutive_failures} 次，原因 {reason}"
+                    )
+                self._write_session_file(session, phase="active")
+                return
+
+            session.consecutive_failures = 0
+            session.traffic_cooldown_until = None
             session.samples.append(snapshot)
             session.last_sample_at = snapshot.sampled_at
             session.last_sample_latitude = snapshot.latitude
@@ -311,10 +351,30 @@ class TrafficSampler:
         longitude: float,
     ) -> bool:
         """基于时间与位移阈值决定是否采样。"""
-        if session.last_sample_at is None:
+        if session.traffic_disabled_reason:
+            return False
+
+        if session.traffic_cooldown_until:
+            try:
+                cooldown_until = datetime.fromisoformat(session.traffic_cooldown_until)
+            except ValueError:
+                cooldown_until = None
+            if cooldown_until is not None and now < cooldown_until:
+                return False
+
+        last_attempt_at = _parse_datetime(session.last_attempt_at)
+        last_sample_at = _parse_datetime(session.last_sample_at)
+        if last_sample_at is None:
+            if last_attempt_at is not None:
+                attempt_elapsed_seconds = (now - last_attempt_at).total_seconds()
+                return attempt_elapsed_seconds >= config.traffic_sample_interval
             return True
 
-        last_sample_at = datetime.fromisoformat(session.last_sample_at)
+        if last_attempt_at is not None and last_attempt_at > last_sample_at:
+            attempt_elapsed_seconds = (now - last_attempt_at).total_seconds()
+            if attempt_elapsed_seconds < config.traffic_sample_interval:
+                return False
+
         elapsed_seconds = (now - last_sample_at).total_seconds()
         if elapsed_seconds >= config.traffic_sample_interval:
             return True
@@ -387,6 +447,11 @@ class TrafficSampler:
             return TrafficSession(
                 session_id=str(session_payload["session_id"]),
                 started_at=str(session_payload["started_at"]),
+                last_attempt_at=(
+                    str(session_payload["last_attempt_at"])
+                    if session_payload.get("last_attempt_at") is not None
+                    else None
+                ),
                 last_sample_at=(
                     str(session_payload["last_sample_at"])
                     if session_payload.get("last_sample_at") is not None
@@ -397,6 +462,20 @@ class TrafficSampler:
                 ),
                 last_sample_longitude=_to_optional_float(
                     session_payload.get("last_sample_longitude")
+                ),
+                consecutive_failures=_to_int(
+                    session_payload.get("consecutive_failures"),
+                    default=0,
+                ),
+                traffic_disabled_reason=(
+                    str(session_payload["traffic_disabled_reason"])
+                    if session_payload.get("traffic_disabled_reason") is not None
+                    else None
+                ),
+                traffic_cooldown_until=(
+                    str(session_payload["traffic_cooldown_until"])
+                    if session_payload.get("traffic_cooldown_until") is not None
+                    else None
                 ),
                 samples=samples,
             )
@@ -557,51 +636,55 @@ class TrafficSampler:
 async def fetch_traffic_snapshot(
     latitude: float,
     longitude: float,
-) -> TrafficSnapshot | None:
+) -> TrafficFetchResult:
     """调用高德交通态势接口，获取当前位置的区域路况。"""
     if not config.amap_key:
-        return None
+        return TrafficFetchResult(failure_reason="AMAP_KEY 未配置")
 
-    try:
-        gcj_lat, gcj_lon = wgs84_to_gcj02(latitude, longitude)
-        params = {
-            "key": config.amap_key,
-            "location": f"{gcj_lon:.6f},{gcj_lat:.6f}",
-            "radius": str(config.traffic_query_radius),
-            "level": "6",
-            "extensions": "base",
-            "output": "json",
-        }
+    gcj_lat, gcj_lon = wgs84_to_gcj02(latitude, longitude)
+    params = {
+        "key": config.amap_key,
+        "location": f"{gcj_lon:.6f},{gcj_lat:.6f}",
+        "radius": str(config.traffic_query_radius),
+        "level": "6",
+        "extensions": "base",
+        "output": "json",
+    }
 
-        async with httpx.AsyncClient(timeout=TRAFFIC_REQUEST_TIMEOUT) as client:
-            response = await client.get(AMAP_TRAFFIC_CIRCLE_URL, params=params)
+    data = await amap_request_json(
+        AMAP_TRAFFIC_CIRCLE_URL,
+        params,
+        "高德交通态势",
+        timeout=TRAFFIC_REQUEST_TIMEOUT,
+    )
+    if data is None:
+        return TrafficFetchResult(failure_reason="请求失败")
 
-        if response.status_code != 200:
-            logger.warning(f"高德交通态势请求失败: HTTP {response.status_code}")
-            return None
+    if data.get("status") != "1":
+        info = str(data.get("info", "未知错误"))
+        infocode = str(data.get("infocode", "N/A"))
+        logger.warning(f"高德交通态势返回错误: {info} ({infocode})")
+        cooldown_until = (
+            (datetime.now(tz=UTC) + TRAFFIC_FAILURE_COOLDOWN).isoformat()
+            if _is_long_cooldown_traffic_error(info, infocode)
+            else None
+        )
+        return TrafficFetchResult(
+            failure_reason=f"{info} ({infocode})",
+            cooldown_until=cooldown_until,
+        )
 
-        data = response.json()
-        if not isinstance(data, dict):
-            logger.warning("高德交通态势返回格式异常")
-            return None
+    trafficinfo_raw = data.get("trafficinfo", {})
+    trafficinfo = trafficinfo_raw if isinstance(trafficinfo_raw, dict) else {}
+    evaluation_raw = trafficinfo.get("evaluation", {})
+    evaluation = evaluation_raw if isinstance(evaluation_raw, dict) else {}
 
-        if data.get("status") != "1":
-            logger.warning(
-                "高德交通态势返回错误: "
-                f"{data.get('info', '未知错误')} ({data.get('infocode', 'N/A')})"
-            )
-            return None
+    status = _to_int(evaluation.get("status"), default=0)
+    description_value = trafficinfo.get("description", "")
+    description = description_value if isinstance(description_value, str) else ""
 
-        trafficinfo_raw = data.get("trafficinfo", {})
-        trafficinfo = trafficinfo_raw if isinstance(trafficinfo_raw, dict) else {}
-        evaluation_raw = trafficinfo.get("evaluation", {})
-        evaluation = evaluation_raw if isinstance(evaluation_raw, dict) else {}
-
-        status = _to_int(evaluation.get("status"), default=0)
-        description_value = trafficinfo.get("description", "")
-        description = description_value if isinstance(description_value, str) else ""
-
-        return TrafficSnapshot(
+    return TrafficFetchResult(
+        snapshot=TrafficSnapshot(
             sampled_at=datetime.now(tz=UTC).isoformat(),
             latitude=latitude,
             longitude=longitude,
@@ -612,13 +695,8 @@ async def fetch_traffic_snapshot(
             congested_pct=_to_float(evaluation.get("congested")),
             blocked_pct=_to_float(evaluation.get("blocked")),
             unknown_pct=_to_float(evaluation.get("unknown")),
-        )
-    except httpx.TimeoutException:
-        logger.warning("高德交通态势请求超时")
-        return None
-    except Exception as exc:
-        logger.exception(f"高德交通态势调用异常: {exc}")
-        return None
+        ),
+    )
 
 
 def _status_label(status: int) -> str:
@@ -730,6 +808,41 @@ def _to_int(value: object, default: int) -> int:
             return default
 
     return default
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    """解析 ISO 时间字符串，失败时按缺失处理。"""
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _has_recent_failed_attempt(session: TrafficSession, now: datetime) -> bool:
+    """判断最近一次失败请求是否仍处于采样间隔内。"""
+    last_attempt_at = _parse_datetime(session.last_attempt_at)
+    if last_attempt_at is None:
+        return False
+
+    last_sample_at = _parse_datetime(session.last_sample_at)
+    if last_sample_at is not None and last_attempt_at <= last_sample_at:
+        return False
+
+    elapsed_seconds = (now - last_attempt_at).total_seconds()
+    return elapsed_seconds < config.traffic_sample_interval
+
+
+def _is_long_cooldown_traffic_error(info: str, infocode: str) -> bool:
+    """识别需要长冷却的高德路况错误。"""
+    normalized = f"{info} {infocode}".upper()
+    return (
+        "CUQPS" in normalized
+        or "DAILY_QUERY_OVER_LIMIT" in normalized
+        or "UNKNOWN_ERROR" in normalized
+        or infocode == "20003"
+    )
 
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:

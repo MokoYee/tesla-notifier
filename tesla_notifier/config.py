@@ -56,9 +56,6 @@ class Config:
         )
     )
 
-    # 天气服务
-    caiyun_token: str = field(default_factory=lambda: os.getenv("CAIYUN_TOKEN", ""))
-
     # 高德地图
     amap_key: str = field(default_factory=lambda: os.getenv("AMAP_KEY", ""))
     traffic_analysis_enabled: bool = field(

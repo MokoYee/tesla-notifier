@@ -113,21 +113,20 @@ docker network ls
 ## 配置说明
 
 - 完整环境变量说明请参考 [docs/environment.md](docs/environment.md)
-- 常用可选功能：`AMAP_KEY`、`CAIYUN_TOKEN`、`SENTRY_NOTIFY_ENABLED`、`DEPARTURE_SAFETY_NOTIFY_ENABLED`、`TPMS_NOTIFY_ENABLED`、`CHARGING_ISSUE_NOTIFY_ENABLED`
+- 常用可选功能：`AMAP_KEY`、`SENTRY_NOTIFY_ENABLED`、`DEPARTURE_SAFETY_NOTIFY_ENABLED`、`TPMS_NOTIFY_ENABLED`、`CHARGING_ISSUE_NOTIFY_ENABLED`
 - 弱网行程补偿、系统健康通知和 `./data` 状态持久化默认已启用，一般无需额外配置
 
 ## 天气服务
 
-- **彩云天气**（推荐）- 配置 `CAIYUN_TOKEN` 后使用，支持空气质量、紫外线等数据
-  - [申请 Token](https://platform.caiyunapp.com/)
-  - [API 文档](https://docs.caiyunapp.com/weather-api/v2/v2.6/1-realtime.html)
-- **Open-Meteo**（备用）- 免费，无需配置，彩云失败时自动回退
+- **高德天气** - 配置 `AMAP_KEY` 后优先使用，按当前位置行政区查询中文天气
+- **Open-Meteo**（备用）- 免费，无需配置，高德天气不可用时自动回退
 
 ## 高德地图服务
 
-配置 `AMAP_KEY` 后可启用两类能力：
+配置 `AMAP_KEY` 后可启用三类能力：
 
 - 逆地理编码: 将 GPS 坐标转换为更精确的中文地址
+- 天气查询: 每日简报优先使用高德中文天气
 - 行程路况分析: 在行程中低频调用高德交通态势接口，汇总后并入行程评分与分析文案
 
 **申请步骤：**
@@ -139,6 +138,7 @@ docker network ls
 
 **参考文档：**
 - [逆地理编码 API](https://lbs.amap.com/api/webservice/guide/api/georegeo)
+- [天气查询 API](https://lbs.amap.com/api/webservice/guide/api/weatherinfo)
 - [交通态势查询 API](https://lbs.amap.com/api/webservice/guide/api-advanced/traffic-situation-inquiry)
 
 > 说明：逆地理编码通常是标准 Web 服务能力；交通态势查询在高德官方文档中标注为高级服务接口。若你的 key 无权限，本项目会自动降级为“无路况增强”，不会影响主通知。

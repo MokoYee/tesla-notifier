@@ -6,9 +6,13 @@ from typing import Literal
 import httpx
 
 from tesla_notifier.config import config
+from tesla_notifier.integrations.amap import amap_request_json, get_adcode
 from tesla_notifier.logger import setup_logger
 
 logger = setup_logger("weather")
+
+AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
+WEATHER_REQUEST_TIMEOUT = 30.0
 
 
 @dataclass
@@ -22,35 +26,7 @@ class WeatherData:
     humidity: int
     wind_speed: float | None = None
     precipitation: float | None = None
-    aqi: int | None = None
-    pm25: float | None = None
-    ultraviolet: float | None = None
-    source: Literal["caiyun", "openmeteo"] = "openmeteo"
-
-
-# 彩云天气 skycon 代码映射
-CAIYUN_SKYCON: dict[str, str] = {
-    "CLEAR_DAY": "晴",
-    "CLEAR_NIGHT": "晴",
-    "PARTLY_CLOUDY_DAY": "多云",
-    "PARTLY_CLOUDY_NIGHT": "多云",
-    "CLOUDY": "阴",
-    "LIGHT_HAZE": "轻度雾霾",
-    "MODERATE_HAZE": "中度雾霾",
-    "HEAVY_HAZE": "重度雾霾",
-    "LIGHT_RAIN": "小雨",
-    "MODERATE_RAIN": "中雨",
-    "HEAVY_RAIN": "大雨",
-    "STORM_RAIN": "暴雨",
-    "FOG": "雾",
-    "LIGHT_SNOW": "小雪",
-    "MODERATE_SNOW": "中雪",
-    "HEAVY_SNOW": "大雪",
-    "STORM_SNOW": "暴雪",
-    "DUST": "浮尘",
-    "SAND": "沙尘",
-    "WIND": "大风",
-}
+    source: Literal["amap", "openmeteo"] = "openmeteo"
 
 # WMO Weather interpretation codes
 WMO_CODES: dict[int, str] = {
@@ -85,52 +61,93 @@ WMO_CODES: dict[int, str] = {
 }
 
 
-async def get_weather_from_caiyun(latitude: float, longitude: float) -> WeatherData | None:
-    """从彩云天气获取数据"""
-    if not config.caiyun_token:
-        logger.warning("彩云天气 Token 未配置，跳过")
+async def get_weather_from_amap(latitude: float, longitude: float) -> WeatherData | None:
+    """从高德天气获取数据。"""
+    if not config.amap_key:
         return None
 
-    location = f"{longitude},{latitude}"
-    url = f"https://api.caiyunapp.com/v2.6/{config.caiyun_token}/{location}/weather"
-    params = {"alert": "true", "dailysteps": "1"}
+    adcode = await get_adcode(latitude, longitude)
+    if not adcode:
+        logger.warning("高德天气缺少 adcode，回退 Open-Meteo")
+        return None
 
-    logger.info(f"请求彩云天气 API: {location}")
+    params = {
+        "key": config.amap_key,
+        "city": adcode,
+        "extensions": "all",
+        "output": "json",
+    }
+    logger.info(f"请求高德天气 API: adcode={adcode}")
+
+    data = await amap_request_json(
+        AMAP_WEATHER_URL,
+        params,
+        "高德天气",
+        timeout=WEATHER_REQUEST_TIMEOUT,
+    )
+    if data is None:
+        return None
+
+    if data.get("status") != "1":
+        logger.warning(
+            "高德天气返回错误: "
+            f"{data.get('info', '未知错误')} ({data.get('infocode', 'N/A')})"
+        )
+        return None
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, params=params)
-
-            if response.status_code != 200:
-                logger.error(f"彩云 API 请求失败: HTTP {response.status_code}")
-                return None
-
-            data = response.json()
-
-            if data.get("status") != "ok":
-                logger.error(f"彩云 API 返回错误: {data.get('status')}")
-                return None
-
-            realtime = data["result"]["realtime"]
-            daily = data["result"]["daily"]
-
-            return WeatherData(
-                condition=CAIYUN_SKYCON.get(realtime["skycon"], realtime["skycon"]),
-                temp=realtime["temperature"],
-                temp_min=daily["temperature"][0].get("min", realtime["temperature"] - 5),
-                temp_max=daily["temperature"][0].get("max", realtime["temperature"] + 5),
-                humidity=int(realtime["humidity"] * 100),
-                wind_speed=realtime["wind"]["speed"],
-                precipitation=daily["precipitation"][0].get("avg"),
-                aqi=realtime.get("air_quality", {}).get("aqi", {}).get("chn"),
-                pm25=realtime.get("air_quality", {}).get("pm25"),
-                ultraviolet=realtime.get("life_index", {}).get("ultraviolet", {}).get("index"),
-                source="caiyun",
-            )
-
-    except Exception as e:
-        logger.exception(f"彩云天气 API 异常: {e}")
+        return _parse_amap_weather(data)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        logger.warning(f"高德天气返回数据无法解析: {exc}")
         return None
+
+
+def _parse_amap_weather(data: dict[str, object]) -> WeatherData:
+    """解析高德天气返回结果，优先使用预报并补齐当前字段。"""
+    forecasts = data.get("forecasts", [])
+    if not isinstance(forecasts, list) or not forecasts:
+        raise ValueError("forecasts 为空")
+
+    forecast = forecasts[0]
+    if not isinstance(forecast, dict):
+        raise ValueError("forecast 格式异常")
+
+    casts = forecast.get("casts", [])
+    if not isinstance(casts, list) or not casts:
+        raise ValueError("casts 为空")
+
+    today = casts[0]
+    if not isinstance(today, dict):
+        raise ValueError("cast 格式异常")
+
+    lives = data.get("lives", [])
+    live = lives[0] if isinstance(lives, list) and lives else {}
+    live = live if isinstance(live, dict) else {}
+
+    day_weather = _as_str(today.get("dayweather")) or "未知"
+    night_weather = _as_str(today.get("nightweather"))
+    condition = day_weather
+    if night_weather and night_weather != day_weather:
+        condition = f"{day_weather}转{night_weather}"
+
+    temp_max = _as_float(today.get("daytemp"))
+    temp_min = _as_float(today.get("nighttemp"))
+    live_temp = _as_optional_float(live.get("temperature"))
+    temp = live_temp if live_temp is not None else (temp_min + temp_max) / 2
+    humidity = _as_int(live.get("humidity"), default=50)
+    wind_speed = _wind_power_to_speed_kmh(
+        _as_str(live.get("windpower")) or _as_str(today.get("daypower"))
+    )
+
+    return WeatherData(
+        condition=condition,
+        temp=temp,
+        temp_min=temp_min,
+        temp_max=temp_max,
+        humidity=humidity,
+        wind_speed=wind_speed,
+        source="amap",
+    )
 
 
 async def get_weather_from_openmeteo(latitude: float, longitude: float) -> WeatherData | None:
@@ -148,7 +165,7 @@ async def get_weather_from_openmeteo(latitude: float, longitude: float) -> Weath
     logger.info(f"请求 Open-Meteo API (备用): {latitude}, {longitude}")
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=WEATHER_REQUEST_TIMEOUT) as client:
             response = await client.get(url, params=params)
 
             if response.status_code != 200:
@@ -174,14 +191,14 @@ async def get_weather_from_openmeteo(latitude: float, longitude: float) -> Weath
 
 
 async def get_weather(latitude: float, longitude: float) -> WeatherData | None:
-    """获取天气数据，优先彩云，失败回退 Open-Meteo"""
+    """获取天气数据，优先高德，失败回退 Open-Meteo。"""
     logger.info(f"获取天气数据: {latitude}, {longitude}")
 
-    if config.caiyun_token:
-        caiyun_data = await get_weather_from_caiyun(latitude, longitude)
-        if caiyun_data:
-            return caiyun_data
-        logger.warning("彩云天气获取失败，回退到 Open-Meteo")
+    if config.amap_key:
+        amap_data = await get_weather_from_amap(latitude, longitude)
+        if amap_data:
+            return amap_data
+        logger.warning("高德天气获取失败，回退到 Open-Meteo")
 
     return await get_weather_from_openmeteo(latitude, longitude)
 
@@ -198,13 +215,6 @@ def generate_weather_suggestion(weather: WeatherData) -> str:
     elif 15 <= weather.temp <= 25:
         suggestions.append("温度适宜，能耗表现较好")
 
-    # 空气质量建议（彩云特有）
-    if weather.aqi is not None:
-        if weather.aqi > 150:
-            suggestions.append(f"空气质量较差(AQI:{weather.aqi})，建议开启车内空气净化")
-        elif weather.aqi > 100:
-            suggestions.append(f"空气质量一般(AQI:{weather.aqi})")
-
     # 降水建议
     if weather.precipitation and weather.precipitation > 10:
         suggestions.append("有降雨，注意行车安全，能见度可能降低")
@@ -213,11 +223,87 @@ def generate_weather_suggestion(weather: WeatherData) -> str:
     if weather.wind_speed and weather.wind_speed > 30:
         suggestions.append("风力较大，高速行驶注意横风影响")
 
-    # 紫外线建议（彩云特有）
-    if weather.ultraviolet is not None and weather.ultraviolet > 7:
-        suggestions.append("紫外线较强，建议使用遮阳挡")
-
     return "；".join(suggestions) if suggestions else "天气良好，祝您出行愉快"
+
+
+def _as_str(value: object) -> str | None:
+    """把接口返回值清洗成非空字符串。"""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if normalized in {"", "[]", "无"}:
+        return None
+    return normalized
+
+
+def _as_float(value: object) -> float:
+    """把接口返回值转成浮点数，缺失时抛出异常交给上层降级。"""
+    if isinstance(value, bool):
+        raise ValueError("布尔值不是有效数值")
+    if isinstance(value, int | float | str):
+        return float(value)
+    raise ValueError(f"无效数值: {value!r}")
+
+
+def _as_optional_float(value: object) -> float | None:
+    """把可选接口返回值转成浮点数。"""
+    if value is None:
+        return None
+    try:
+        return _as_float(value)
+    except ValueError:
+        return None
+
+
+def _as_int(value: object, default: int) -> int:
+    """把接口返回值转成整数，缺失时使用默认值。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int | float | str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return default
+    return default
+
+
+def _wind_power_to_speed_kmh(wind_power: str | None) -> float | None:
+    """把高德风力等级粗略换算为 km/h，供现有风速提醒复用。"""
+    if wind_power is None:
+        return None
+
+    normalized = wind_power.replace("级", "").strip()
+    if normalized in {"≤3", "<3", "3以下", "微风"}:
+        return 19.0
+
+    for separator in ("-", "~", "～"):
+        if separator in normalized:
+            upper = normalized.split(separator)[-1]
+            return _wind_level_to_kmh(_as_int(upper, default=0))
+
+    return _wind_level_to_kmh(_as_int(normalized, default=0))
+
+
+def _wind_level_to_kmh(level: int) -> float | None:
+    """按蒲福风级上限近似转换为 km/h。"""
+    if level <= 0:
+        return None
+    level_upper_bounds = {
+        1: 5.0,
+        2: 11.0,
+        3: 19.0,
+        4: 28.0,
+        5: 38.0,
+        6: 49.0,
+        7: 61.0,
+        8: 74.0,
+        9: 88.0,
+        10: 102.0,
+        11: 117.0,
+    }
+    return level_upper_bounds.get(level, 118.0)
 
 
 def get_weather_icon(condition: str) -> str:
@@ -289,4 +375,3 @@ def get_weather_icon(condition: str) -> str:
 
     # 默认图标
     return "🌤️"
-

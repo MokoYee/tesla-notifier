@@ -283,9 +283,9 @@ def _get_enabled_feature_labels() -> list[str]:
 
 def _get_weather_service_status() -> str:
     """返回天气服务当前状态描述。"""
-    if config.caiyun_token:
-        return "彩云天气已启用，异常时自动回退 Open-Meteo"
-    return "未配置彩云天气，当前使用 Open-Meteo"
+    if config.amap_key:
+        return "高德天气已启用，异常时自动回退 Open-Meteo"
+    return "AMAP_KEY 未配置，当前使用 Open-Meteo"
 
 
 def _get_traffic_sampler_status() -> str:
@@ -911,7 +911,6 @@ async def run() -> None:
     logger.info(f"  MIN_TRIP_DISTANCE: {config.min_trip_distance}")
     logger.info(f"  MQTT_URL: {config.mqtt_url if config.mqtt_enabled else '(未启用)'}")
     logger.info(f"  BARK_KEY: {'(已配置)' if config.bark_key else '(未配置)'}")
-    logger.info(f"  CAIYUN_TOKEN: {'(已配置)' if config.caiyun_token else '(未配置)'}")
     logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
     logger.info(f"天气服务状态: {_get_weather_service_status()}")
