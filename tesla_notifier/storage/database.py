@@ -1217,7 +1217,7 @@ def _build_trip_commentary(
 ) -> str | None:
     """生成面向车主的行程点评
 
-    使用本地特征匹配替代固定分支，保证文案可扩展且无需引入外部模型。
+    使用本地行程画像替代固定模板，保证文案稳定、可解释且无需引入外部模型。
     """
     avg_speed_kmh = distance_km / (duration_min / 60.0) if duration_min > 0 else 0.0
     return build_trip_commentary(
@@ -1241,7 +1241,6 @@ def _build_trip_commentary(
             elevation_loss_m=terrain.elevation_loss_m,
             net_elevation_change_m=terrain.net_elevation_change_m,
             terrain_variation_m_per_km=terrain.terrain_variation_m_per_km,
-            style=config.driving_commentary_style,
         )
     )
 

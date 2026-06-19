@@ -29,9 +29,6 @@ tesla-notifier = "tesla_notifier.main:main"
 [tool.setuptools.packages.find]
 include = ["tesla_notifier*"]
 
-[tool.setuptools.package-data]
-"tesla_notifier.analytics" = ["*.toml"]
-
 [tool.ruff]
 line-length = 100
 target-version = "py311"

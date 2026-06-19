@@ -68,7 +68,6 @@ You can start from [`.env.example`](../.env.example) or use [`docker-compose.yml
 | --- | --- | --- | --- |
 | `CAR_ID` | `1` | No | TeslaMate vehicle ID. Must match the vehicle used in MQTT and PostgreSQL |
 | `MIN_TRIP_DISTANCE` | `1` | No | Trips shorter than this distance will not be pushed |
-| `DRIVING_COMMENTARY_STYLE` | `normal` | No | Trip commentary style. Supported values: `normal` / `aggressive` |
 | `TZ` | `Asia/Shanghai` | No | Application timezone |
 | `STATE_FILE` | `./data/state.json` | No | Persistence file path for already-pushed events |
 | `LOG_LEVEL` | `INFO` | No | Log level. Supported values: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -166,8 +165,7 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 - If you only want realtime notifications, keep `ENABLE_MQTT=true` and disable `ENABLE_CRON` as needed.
 - MQTT freshness monitoring compares the latest `positions` write time with MQTT realtime message time; if the database keeps updating while MQTT stalls, a system alert is sent.
 - Trip traffic analysis uses a local JSON cache and does not introduce any extra database dependency. The default cache directory is `./data/traffic_snapshots/`.
-- `DRIVING_COMMENTARY_STYLE` defaults to `normal` and is intentionally not added to `.env.example`; only set it explicitly if you want the more outspoken `aggressive` style.
-- Trip commentary is matched locally using speed, hard acceleration / hard braking, traffic pressure, and elevation-change features.
+- Trip commentary automatically adjusts expression intensity using speed, hard acceleration / hard braking, traffic pressure, and elevation-change features.
 - According to Amap's official documentation, traffic status queries are part of its advanced service set. If your key does not have access, the service will automatically skip traffic sampling and continue sending normal trip notifications.
 - User-facing notifications do not show technical metadata by default. Event IDs, event types, priority, and trigger reasons are mainly used for logs and troubleshooting.
 - If Bark itself fails, Bark cannot be used to report its own failure. The current strategy is to keep detailed logs and continue delivering later notifications once the pipeline recovers.
