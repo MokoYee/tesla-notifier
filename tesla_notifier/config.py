@@ -163,6 +163,24 @@ class Config:
     mqtt_disconnect_alert_after: int = field(
         default_factory=lambda: int(os.getenv("MQTT_DISCONNECT_ALERT_AFTER", "300"))
     )
+    mqtt_freshness_monitor_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "MQTT_FRESHNESS_MONITOR_ENABLED",
+            "ON",
+        ).upper()
+        == "ON"
+    )
+    mqtt_freshness_check_interval: int = field(
+        default_factory=lambda: int(os.getenv("MQTT_FRESHNESS_CHECK_INTERVAL", "300"))
+    )
+    mqtt_freshness_stale_after: int = field(
+        default_factory=lambda: int(os.getenv("MQTT_FRESHNESS_STALE_AFTER", "900"))
+    )
+    mqtt_freshness_db_active_window: int = field(
+        default_factory=lambda: int(
+            os.getenv("MQTT_FRESHNESS_DB_ACTIVE_WINDOW", "1800")
+        )
+    )
 
     # 日志级别（DEBUG/INFO/WARNING/ERROR）
     log_level: str = field(
@@ -245,6 +263,18 @@ class Config:
 
         if self.mqtt_disconnect_alert_after < 30:
             errors.append("MQTT_DISCONNECT_ALERT_AFTER 建议不小于 30 秒")
+
+        if self.mqtt_freshness_check_interval < 60:
+            errors.append("MQTT_FRESHNESS_CHECK_INTERVAL 建议不小于 60 秒")
+
+        if self.mqtt_freshness_stale_after < 300:
+            errors.append("MQTT_FRESHNESS_STALE_AFTER 建议不小于 300 秒")
+
+        if self.mqtt_freshness_db_active_window < self.mqtt_freshness_stale_after:
+            errors.append(
+                "MQTT_FRESHNESS_DB_ACTIVE_WINDOW "
+                "必须大于等于 MQTT_FRESHNESS_STALE_AFTER"
+            )
 
         if self.driving_commentary_style != _normalize_driving_commentary_style(
             self.driving_commentary_style

@@ -22,6 +22,11 @@ from tesla_notifier.integrations.weather import (
 from tesla_notifier.logger import setup_logger
 from tesla_notifier.notifications import bark
 from tesla_notifier.runtime.health import SystemAlert, failure_monitor
+from tesla_notifier.runtime.mqtt_freshness import (
+    MqttFreshnessMonitor,
+    parse_teslamate_since,
+    run_mqtt_freshness_monitor,
+)
 from tesla_notifier.runtime.mqtt_handler import MqttHandler
 from tesla_notifier.runtime.scheduler import Scheduler
 from tesla_notifier.storage import database
@@ -34,6 +39,8 @@ mqtt_handler: MqttHandler | None = None
 scheduler: Scheduler | None = None
 traffic_sampler: TrafficSampler | None = None
 trip_compensation_task: asyncio.Task[None] | None = None
+mqtt_freshness_task: asyncio.Task[None] | None = None
+mqtt_freshness_monitor: MqttFreshnessMonitor | None = None
 _shutdown_event: asyncio.Event | None = None
 _trip_processing_lock: asyncio.Lock | None = None
 
@@ -214,6 +221,15 @@ async def run_trip_compensation_worker() -> None:
     except asyncio.CancelledError:
         logger.info("行程补偿巡检任务已停止")
         raise
+
+
+def handle_mqtt_monitor_message(topic_name: str, payload: str) -> None:
+    """把 MQTT 消息时间同步给新鲜度监控。"""
+    if mqtt_freshness_monitor is None:
+        return
+
+    since_at = parse_teslamate_since(payload) if topic_name == "since" else None
+    mqtt_freshness_monitor.record_mqtt_message(since_at=since_at)
 
 
 def _current_local_time() -> str:
@@ -872,7 +888,8 @@ async def handle_charging_issue_alert() -> None:
 
 async def run() -> None:
     """运行服务"""
-    global mqtt_handler, scheduler, traffic_sampler, trip_compensation_task, _trip_processing_lock
+    global mqtt_handler, scheduler, traffic_sampler, trip_compensation_task
+    global mqtt_freshness_monitor, mqtt_freshness_task, _trip_processing_lock
 
     logger.info("========== Tesla Notifier 启动 ==========")
 
@@ -976,6 +993,23 @@ async def run() -> None:
     logger.debug(
         f"  MQTT_DISCONNECT_ALERT_AFTER: {config.mqtt_disconnect_alert_after}s"
     )
+    logger.debug(
+        "  MQTT_FRESHNESS_MONITOR_ENABLED: "
+        f"{'(已开启)' if config.mqtt_freshness_monitor_enabled else '(已关闭)'}"
+    )
+    if config.mqtt_freshness_monitor_enabled:
+        logger.debug(
+            "  MQTT_FRESHNESS_CHECK_INTERVAL: "
+            f"{config.mqtt_freshness_check_interval}s"
+        )
+        logger.debug(
+            "  MQTT_FRESHNESS_STALE_AFTER: "
+            f"{config.mqtt_freshness_stale_after}s"
+        )
+        logger.debug(
+            "  MQTT_FRESHNESS_DB_ACTIVE_WINDOW: "
+            f"{config.mqtt_freshness_db_active_window}s"
+        )
 
     loop = asyncio.get_event_loop()
     failure_monitor.configure(loop, handle_system_alert)
@@ -1007,13 +1041,27 @@ async def run() -> None:
             on_tire_pressure_alert=handle_tire_pressure_alert,
             on_charging_issue_alert=handle_charging_issue_alert,
             on_position_update=handle_position_update,
+            on_mqtt_message=handle_mqtt_monitor_message,
         )
         mqtt_handler.set_event_loop(loop)
         mqtt_handler.connect()
         trip_compensation_task = asyncio.create_task(run_trip_compensation_worker())
+        if config.mqtt_freshness_monitor_enabled:
+            mqtt_freshness_monitor = MqttFreshnessMonitor(
+                car_id=config.car_id,
+                latest_position_time_provider=database.get_latest_position_time,
+                alert_handler=handle_system_alert,
+                stale_after_seconds=config.mqtt_freshness_stale_after,
+                db_active_window_seconds=config.mqtt_freshness_db_active_window,
+            )
+            mqtt_freshness_task = asyncio.create_task(
+                run_mqtt_freshness_monitor(mqtt_freshness_monitor)
+            )
     else:
         logger.warning("MQTT 订阅未启用 (设置 ENABLE_MQTT=true 启用)")
         trip_compensation_task = None
+        mqtt_freshness_monitor = None
+        mqtt_freshness_task = None
 
     # 启动定时任务
     if config.cron_enabled:
@@ -1047,6 +1095,7 @@ async def run() -> None:
 async def cleanup() -> None:
     """清理所有资源（统一的清理函数）"""
     global mqtt_handler, scheduler, traffic_sampler, trip_compensation_task
+    global mqtt_freshness_monitor, mqtt_freshness_task
 
     logger.info("========== 正在停止服务 ==========")
 
@@ -1062,6 +1111,13 @@ async def cleanup() -> None:
         with suppress(asyncio.CancelledError):
             await trip_compensation_task
         trip_compensation_task = None
+
+    if mqtt_freshness_task:
+        mqtt_freshness_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await mqtt_freshness_task
+        mqtt_freshness_task = None
+        mqtt_freshness_monitor = None
 
     try:
         await failure_monitor.shutdown()

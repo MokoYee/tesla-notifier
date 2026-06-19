@@ -841,6 +841,35 @@ async def get_vehicle_last_position(car_id: str) -> tuple[int, float, float] | N
         return None
 
 
+async def get_latest_position_time(car_id: str) -> datetime | None:
+    """获取指定车辆最近一次位置写入时间。"""
+    try:
+        async with get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT MAX(date)
+                    FROM positions
+                    WHERE car_id = %s
+                    """,
+                    (car_id,),
+                )
+                row = await cur.fetchone()
+
+                if not row or row[0] is None:
+                    return None
+
+                value = row[0]
+                if isinstance(value, datetime):
+                    return value
+
+                logger.warning(f"最近位置时间类型异常: {type(value)!r}")
+                return None
+    except Exception as e:
+        logger.exception(f"查询最近位置时间失败: {e}")
+        return None
+
+
 def _clamp(value: float, lower: float, upper: float) -> float:
     """限制数值范围"""
     return max(lower, min(value, upper))

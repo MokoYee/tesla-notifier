@@ -104,6 +104,10 @@
 | `FAILURE_ALERT_NOTIFY_ENABLED` | `ON` | 否 | 是否开启数据库 / MQTT 关键链路故障告警 |
 | `DB_FAILURE_ALERT_THRESHOLD` | `3` | 否 | 数据库连续失败达到该次数后触发系统告警 |
 | `MQTT_DISCONNECT_ALERT_AFTER` | `300` | 否 | MQTT 持续断链达到该秒数后触发系统告警 |
+| `MQTT_FRESHNESS_MONITOR_ENABLED` | `ON` | 否 | 是否监控 TeslaMate 数据库写入与 MQTT 实时状态是否同步 |
+| `MQTT_FRESHNESS_CHECK_INTERVAL` | `300` | 否 | MQTT 新鲜度巡检周期，单位秒 |
+| `MQTT_FRESHNESS_STALE_AFTER` | `900` | 否 | 数据库仍有新位置但 MQTT 长时间未更新达到该秒数后触发告警 |
+| `MQTT_FRESHNESS_DB_ACTIVE_WINDOW` | `1800` | 否 | 只有数据库最近位置在该窗口内更新时才判定 MQTT 停滞，避免车辆长期离线时误报 |
 
 ## 通知可信度规则
 
@@ -135,7 +139,7 @@
 | 充电异常 | `事实事件` | `高` | MQTT `charging_state=NoPower` 或 `Stopped` 且 SoC 未达目标 |
 | 离车安全提醒 | `分析结果` | `高` | 离车延迟校验后，门锁 / 车窗 / 备箱 / 充电口等规则命中 |
 | 每日 / 周 / 月报 | `分析结果` | `低` | 天气、历史行程、充电数据聚合 |
-| 启动自检 / 链路告警 | `系统状态` | `中/高` | 启动探活、数据库连续失败、MQTT 长时间断链 |
+| 启动自检 / 链路告警 | `系统状态` | `中/高` | 启动探活、数据库连续失败、MQTT 长时间断链或实时数据停滞 |
 
 ## 推荐配置示例
 
@@ -159,6 +163,7 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 - 离车安全提醒默认会等待 180 秒再检查，并在 600 秒冷却窗口内抑制重复提醒，更适合下车后仍在后备箱取物、插枪等短暂停留场景。
 - 充电异常中的 `NoPower` 默认会等待 180 秒确认，过滤慢充刚插枪时的短暂无供电握手阶段。
 - 如果你只想用实时通知，可以保留 `ENABLE_MQTT=true`，并按需关闭 `ENABLE_CRON`。
+- MQTT 新鲜度监控会比较数据库 `positions` 最近写入时间和 MQTT 实时消息时间；当数据库仍在更新但 MQTT 长时间停滞时，会发送系统告警。
 - 行程路况分析使用本地 JSON 缓存，不会额外引入数据库；缓存目录默认为 `./data/traffic_snapshots/`。
 - `DRIVING_COMMENTARY_STYLE` 默认为 `normal`，未写入 `.env.example`；只有显式配置时才会切到更敢说的 `aggressive` 风格。
 - 行程点评会综合速度、急加速 / 急减速、路况压力以及海拔起伏特征做本地匹配。

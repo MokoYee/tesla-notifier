@@ -105,6 +105,10 @@ You can start from [`.env.example`](../.env.example) or use [`docker-compose.yml
 | `FAILURE_ALERT_NOTIFY_ENABLED` | `ON` | No | Whether to enable critical database / MQTT failure alerts |
 | `DB_FAILURE_ALERT_THRESHOLD` | `3` | No | Trigger a system alert after this many consecutive database failures |
 | `MQTT_DISCONNECT_ALERT_AFTER` | `300` | No | Trigger a system alert when MQTT remains disconnected for this many seconds |
+| `MQTT_FRESHNESS_MONITOR_ENABLED` | `ON` | No | Whether to monitor TeslaMate PostgreSQL writes against MQTT realtime state freshness |
+| `MQTT_FRESHNESS_CHECK_INTERVAL` | `300` | No | MQTT freshness check interval, in seconds |
+| `MQTT_FRESHNESS_STALE_AFTER` | `900` | No | Trigger an alert after MQTT remains stale for this many seconds while the database still receives new positions |
+| `MQTT_FRESHNESS_DB_ACTIVE_WINDOW` | `1800` | No | Only treat MQTT as stale when the latest database position is inside this active window, to avoid false alerts while the vehicle is inactive |
 
 ## Notification Confidence Rules
 
@@ -136,7 +140,7 @@ You can start from [`.env.example`](../.env.example) or use [`docker-compose.yml
 | Charging Issue | `fact` | `high` | MQTT `charging_state=NoPower` or `Stopped` while SoC is still below target |
 | Departure Safety Alert | `analysis` | `high` | Rule match after delayed departure check for lock / windows / trunks / charge port |
 | Daily / Weekly / Monthly Reports | `analysis` | `low` | Aggregated weather, trip history, and charging data |
-| Startup Self-check / Pipeline Alert | `system` | `medium/high` | Startup probes, consecutive database failures, long MQTT disconnection |
+| Startup Self-check / Pipeline Alert | `system` | `medium/high` | Startup probes, consecutive database failures, long MQTT disconnection, or stale realtime data |
 
 ## Recommended Example
 
@@ -160,6 +164,7 @@ CHARGING_ISSUE_NOTIFY_ENABLED=ON
 - Departure safety alerts now wait 180 seconds by default and apply a 600-second cooldown window, which is better suited to short stays around the vehicle while unloading items or plugging in.
 - `NoPower` charging alerts now wait 180 seconds by default to filter out short handshake phases right after an AC charging cable is plugged in.
 - If you only want realtime notifications, keep `ENABLE_MQTT=true` and disable `ENABLE_CRON` as needed.
+- MQTT freshness monitoring compares the latest `positions` write time with MQTT realtime message time; if the database keeps updating while MQTT stalls, a system alert is sent.
 - Trip traffic analysis uses a local JSON cache and does not introduce any extra database dependency. The default cache directory is `./data/traffic_snapshots/`.
 - `DRIVING_COMMENTARY_STYLE` defaults to `normal` and is intentionally not added to `.env.example`; only set it explicitly if you want the more outspoken `aggressive` style.
 - Trip commentary is matched locally using speed, hard acceleration / hard braking, traffic pressure, and elevation-change features.

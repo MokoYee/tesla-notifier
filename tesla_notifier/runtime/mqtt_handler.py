@@ -32,6 +32,7 @@ AsyncPositionCallback = Callable[
     [float | None, float | None],
     Coroutine[Any, Any, None],
 ]
+SyncMqttMessageCallback = Callable[[str, str], None]
 
 
 @dataclass
@@ -107,6 +108,7 @@ class MqttHandler:
     on_tire_pressure_alert: AsyncCallback | None = None
     on_charging_issue_alert: AsyncCallback | None = None
     on_position_update: AsyncPositionCallback | None = None
+    on_mqtt_message: SyncMqttMessageCallback | None = None
 
     client: mqtt.Client | None = None
     vehicle_state: VehicleState = field(default_factory=VehicleState)
@@ -199,6 +201,8 @@ class MqttHandler:
         payload = msg.payload.decode("utf-8")
 
         logger.debug(f"MQTT 收到: {topic_name} = {payload}")
+        if self.on_mqtt_message is not None:
+            self.on_mqtt_message(topic_name, payload)
 
         if topic_name == "state":
             self._handle_drive_state(payload)
