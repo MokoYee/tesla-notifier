@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -165,6 +165,7 @@ class DrivingScore:
     hard_brake_rate: float  # 每 100 km 急减速次数
     confidence: float  # 样本置信度，主要用于短途平滑
     trip_commentary: str | None  # 行程点评
+    driving_insights: list[str] = field(default_factory=list)  # 行程解释要点
     traffic_label: str | None = None  # 行程交通画像
     traffic_summary: str | None = None  # 行程交通摘要
     traffic_sample_count: int = 0  # 路况采样次数
@@ -1244,6 +1245,103 @@ def _build_trip_commentary(
         )
     )
 
+
+def _build_driving_insights(
+    *,
+    distance_km: float,
+    duration_min: float,
+    efficiency_wh_km: float,
+    context: DrivingContext,
+    terrain: TerrainContext,
+    traffic_summary: TrafficSummary | None,
+    outside_temp_c: float | None,
+    hard_accel_rate: float,
+    hard_brake_rate: float,
+) -> list[str]:
+    """生成行程解释要点，只输出可由本地数据支撑的结论。"""
+    insights: list[str] = []
+    avg_speed_kmh = distance_km / (duration_min / 60.0) if duration_min > 0 else 0.0
+
+    scene_parts: list[str] = []
+    if context.highway_ratio >= 0.5:
+        scene_parts.append(f"高速占比约 {context.highway_ratio * 100:.0f}%")
+    elif context.urban_ratio >= 0.55:
+        scene_parts.append(f"城市低速占比约 {context.urban_ratio * 100:.0f}%")
+
+    if context.stop_go_density >= 3.0:
+        scene_parts.append(f"停走密度 {context.stop_go_density:.1f} 次/10km")
+    if avg_speed_kmh > 0:
+        scene_parts.append(f"均速 {avg_speed_kmh:.0f} km/h")
+    if scene_parts:
+        insights.append(f"路况结构：{'，'.join(scene_parts)}")
+
+    energy_factors = _build_energy_factor_labels(
+        efficiency_wh_km=efficiency_wh_km,
+        context=context,
+        terrain=terrain,
+        traffic_summary=traffic_summary,
+        outside_temp_c=outside_temp_c,
+    )
+    if energy_factors:
+        insights.append(f"能耗解释：{energy_factors}")
+
+    control_parts: list[str] = []
+    if hard_accel_rate <= 2.0 and hard_brake_rate <= 2.0:
+        control_parts.append("加减速动作很少")
+    elif hard_accel_rate >= 10.0 or hard_brake_rate >= 12.0:
+        control_parts.append("加减速动作偏密集")
+    elif hard_brake_rate >= 8.0:
+        control_parts.append("减速动作略多")
+    elif hard_accel_rate >= 7.0:
+        control_parts.append("加速动作略多")
+
+    if terrain.terrain_variation_m_per_km >= 18:
+        control_parts.append(f"地形起伏 {terrain.terrain_variation_m_per_km:.0f} m/km")
+    elif abs(terrain.net_elevation_change_m) >= 80:
+        direction = "爬升" if terrain.net_elevation_change_m > 0 else "下坡"
+        control_parts.append(f"净{direction} {abs(terrain.net_elevation_change_m):.0f} m")
+
+    if control_parts:
+        insights.append(f"驾驶画像：{'，'.join(control_parts)}")
+
+    return insights[:3]
+
+
+def _build_energy_factor_labels(
+    *,
+    efficiency_wh_km: float,
+    context: DrivingContext,
+    terrain: TerrainContext,
+    traffic_summary: TrafficSummary | None,
+    outside_temp_c: float | None,
+) -> str | None:
+    """提取本次能耗最可能的解释因素。"""
+    factors: list[str] = []
+
+    if efficiency_wh_km >= 190:
+        if context.highway_ratio >= 0.55:
+            factors.append("高速巡航占比较高")
+        if traffic_summary is not None and traffic_summary.stress_index >= 28:
+            factors.append("拥堵压力增加启停损耗")
+        if terrain.net_elevation_change_m >= 80:
+            factors.append("净爬升抬高能耗")
+        elif terrain.terrain_variation_m_per_km >= 18:
+            factors.append("沿途起伏明显")
+        if outside_temp_c is not None and (outside_temp_c <= 5 or outside_temp_c >= 32):
+            factors.append("外温对空调/电池效率不友好")
+    elif efficiency_wh_km <= 140 and context.overspeed_ratio <= 0.05:
+        factors.append("速度结构和能耗表现都比较克制")
+        if terrain.net_elevation_change_m <= -60:
+            factors.append("下坡路段有利于回收")
+
+    if not factors and traffic_summary is not None and traffic_summary.sample_count > 0:
+        factors.append(f"路况画像为{traffic_summary.traffic_label}")
+
+    if not factors:
+        return None
+
+    return "，".join(factors[:3])
+
 # ========== 急加速/急减速检测算法 ==========
 # 急加速检测参数
 ACCEL_SURGE_THRESHOLD = 50  # 功率突增阈值 (kW)，窗口内功率变化超过此值
@@ -1430,9 +1528,17 @@ async def get_trip_driving_score(
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
-                    SELECT distance, duration_min, outside_temp_avg, speed_max
-                    FROM drives
-                    WHERE id = %s
+                    SELECT
+                        distance,
+                        duration_min,
+                        outside_temp_avg,
+                        speed_max,
+                        start_rated_range_km,
+                        end_rated_range_km,
+                        c.efficiency * 1000 as car_efficiency_wh_km
+                    FROM drives d
+                    JOIN cars c ON d.car_id = c.id
+                    WHERE d.id = %s
                     """,
                     (drive_id,),
                 )
@@ -1445,6 +1551,16 @@ async def get_trip_driving_score(
                     else None
                 )
                 speed_max = float(drive_row[3]) if drive_row and drive_row[3] else None
+                rated_range_used = (
+                    max(float(drive_row[4] or 0) - float(drive_row[5] or 0), 0.0)
+                    if drive_row
+                    else 0.0
+                )
+                car_efficiency = (
+                    float(drive_row[6])
+                    if drive_row and drive_row[6] is not None
+                    else 150.0
+                )
 
                 # 获取该行程的所有位置数据（按时间排序）
                 await cur.execute(
@@ -1484,6 +1600,11 @@ async def get_trip_driving_score(
 
                 context = _build_driving_context(speed_data, distance_km)
                 terrain = _build_terrain_context(elevation_data, distance_km)
+                efficiency_wh_km = (
+                    (rated_range_used * car_efficiency) / distance_km
+                    if distance_km > 0
+                    else 0.0
+                )
                 expected_accel_rate, expected_brake_rate = _get_expected_event_rates(
                     context
                 )
@@ -1525,6 +1646,17 @@ async def get_trip_driving_score(
                     speed_max,
                     terrain,
                 )
+                driving_insights = _build_driving_insights(
+                    distance_km=distance_km,
+                    duration_min=duration_min,
+                    efficiency_wh_km=efficiency_wh_km,
+                    context=context,
+                    terrain=terrain,
+                    traffic_summary=traffic_summary,
+                    outside_temp_c=outside_temp_avg,
+                    hard_accel_rate=hard_accel_rate,
+                    hard_brake_rate=hard_brake_rate,
+                )
 
                 return DrivingScore(
                     hard_accel_count=hard_accel_count,
@@ -1536,6 +1668,7 @@ async def get_trip_driving_score(
                     hard_brake_rate=hard_brake_rate,
                     confidence=confidence,
                     trip_commentary=trip_commentary,
+                    driving_insights=driving_insights,
                     traffic_label=(
                         traffic_summary.traffic_label
                         if traffic_summary is not None

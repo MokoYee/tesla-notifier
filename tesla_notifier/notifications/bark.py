@@ -211,6 +211,7 @@ def _build_trip_analysis_lines(
     driving_label: str | None,
     road_context: str | None,
     trip_commentary: str | None,
+    driving_insights: list[str] | None,
     traffic_label: str | None,
     traffic_summary: str | None,
 ) -> list[str]:
@@ -222,6 +223,11 @@ def _build_trip_analysis_lines(
 
     if trip_commentary:
         lines.append(f"🧠 行程点评 · {trip_commentary}")
+
+    if driving_insights:
+        for insight in driving_insights[:3]:
+            if insight.strip():
+                lines.append(f"🔎 {insight}")
 
     if hard_accel_count is not None and hard_brake_count is not None:
         lines.append(_format_trip_actions(hard_accel_count, hard_brake_count))
@@ -481,6 +487,7 @@ async def send_trip_end(
     driving_label: str | None = None,
     road_context: str | None = None,
     trip_commentary: str | None = None,
+    driving_insights: list[str] | None = None,
     traffic_label: str | None = None,
     traffic_summary: str | None = None,
     speed_avg: float | None = None,
@@ -545,6 +552,7 @@ async def send_trip_end(
         driving_label=driving_label,
         road_context=road_context,
         trip_commentary=trip_commentary,
+        driving_insights=driving_insights,
         traffic_label=traffic_label,
         traffic_summary=traffic_summary,
     )
