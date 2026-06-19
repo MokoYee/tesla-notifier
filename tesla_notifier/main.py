@@ -56,7 +56,9 @@ def _get_trip_processing_lock() -> asyncio.Lock:
     return _trip_processing_lock
 
 
-def _parse_trip_end_time(trip: database.TripData) -> datetime | None:
+def _parse_trip_end_time(
+    trip: database.TripData | database.TripCandidate,
+) -> datetime | None:
     """解析行程结束时间，失败时返回 None。"""
     if not trip.end_date:
         return None
@@ -68,9 +70,9 @@ def _parse_trip_end_time(trip: database.TripData) -> datetime | None:
         return None
 
 
-def _select_trip_for_compensation(
-    trips: list[database.TripData],
-) -> database.TripData | None:
+def _select_trip_candidate_for_compensation(
+    trips: list[database.TripCandidate],
+) -> database.TripCandidate | None:
     """从最近行程中挑选一个适合补偿推送的候选项。"""
     cutoff = datetime.now(UTC) - timedelta(hours=config.trip_compensation_max_age_hours)
 
@@ -181,17 +183,22 @@ async def reconcile_trip_notification(trigger_reason: str) -> bool:
         return False
 
     async with _get_trip_processing_lock():
-        trips = await database.get_recent_trips(
+        candidates = await database.get_recent_trip_candidates(
             config.car_id,
             limit=TRIP_COMPENSATION_RECENT_LIMIT,
         )
-        if not trips:
+        if not candidates:
             logger.debug(f"未查询到可补偿的最近行程: {trigger_reason}")
             return False
 
-        trip = _select_trip_for_compensation(trips)
-        if trip is None:
+        candidate = _select_trip_candidate_for_compensation(candidates)
+        if candidate is None:
             logger.debug(f"最近行程均无需补偿推送: {trigger_reason}")
+            return False
+
+        trip = await database.get_trip_by_id(candidate.id)
+        if trip is None:
+            logger.warning(f"候选行程详情加载失败，跳过补偿: trip_id={candidate.id}")
             return False
 
         return await _send_trip_notification(

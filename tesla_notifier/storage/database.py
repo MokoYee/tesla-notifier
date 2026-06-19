@@ -107,6 +107,15 @@ class TripData:
 
 
 @dataclass
+class TripCandidate:
+    """行程补偿候选，只包含前置过滤所需字段。"""
+
+    id: int
+    end_date: str
+    distance: float
+
+
+@dataclass
 class ChargingData:
     """充电数据"""
 
@@ -446,6 +455,89 @@ async def get_recent_trips(car_id: str, limit: int = 5) -> list[TripData]:
     except Exception as e:
         logger.exception(f"查询最近行程失败: {e}")
         return []
+
+
+async def get_recent_trip_candidates(
+    car_id: str,
+    limit: int = 5,
+) -> list[TripCandidate]:
+    """获取最近结束行程的轻量候选，避免补偿巡检提前解析地址。"""
+    try:
+        async with get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT id, end_date, distance
+                    FROM drives
+                    WHERE car_id = %s AND end_date IS NOT NULL
+                    ORDER BY end_date DESC
+                    LIMIT %s
+                    """,
+                    (car_id, limit),
+                )
+                rows = await cur.fetchall()
+
+        return [
+            TripCandidate(
+                id=int(row[0]),
+                end_date=_format_utc_time(row[1]),
+                distance=float(row[2] or 0),
+            )
+            for row in rows
+        ]
+    except Exception as e:
+        logger.exception(f"查询最近行程候选失败: {e}")
+        return []
+
+
+async def get_trip_by_id(drive_id: int) -> TripData | None:
+    """按行程 ID 加载完整行程数据。"""
+    try:
+        async with get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT
+                        d.id,
+                        d.car_id,
+                        d.start_date,
+                        d.end_date,
+                        d.distance,
+                        d.duration_min,
+                        d.start_rated_range_km,
+                        d.end_rated_range_km,
+                        sp.battery_level as start_battery_level,
+                        ep.battery_level as end_battery_level,
+                        d.outside_temp_avg,
+                        d.speed_max,
+                        d.start_geofence_id,
+                        d.end_geofence_id,
+                        d.start_position_id,
+                        d.end_position_id,
+                        sa.name as start_address_name,
+                        ea.name as end_address_name,
+                        CASE WHEN d.duration_min > 0
+                             THEN d.distance / (d.duration_min / 60.0)
+                             ELSE NULL END as speed_avg,
+                        ep.odometer as odometer
+                    FROM drives d
+                    LEFT JOIN addresses sa ON d.start_address_id = sa.id
+                    LEFT JOIN addresses ea ON d.end_address_id = ea.id
+                    LEFT JOIN positions sp ON d.start_position_id = sp.id
+                    LEFT JOIN positions ep ON d.end_position_id = ep.id
+                    WHERE d.id = %s AND d.end_date IS NOT NULL
+                    LIMIT 1
+                    """,
+                    (drive_id,),
+                )
+                row = await cur.fetchone()
+
+            if row is None:
+                return None
+            return await _build_trip_data(conn, row)
+    except Exception as e:
+        logger.exception(f"按 ID 查询行程失败: drive_id={drive_id}, error={e}")
+        return None
 
 
 async def get_latest_trip(car_id: str) -> TripData | None:
