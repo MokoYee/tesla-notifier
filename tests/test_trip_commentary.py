@@ -1,4 +1,4 @@
-"""行程点评匹配测试。"""
+"""行程点评画像测试。"""
 
 from tesla_notifier.analytics.trip_commentary import (
     TripCommentaryInput,
@@ -22,7 +22,6 @@ def _make_input(
     confidence: float = 0.85,
     overspeed_ratio: float = 0.0,
     stop_go_density: float = 1.0,
-    style: str = "normal",
     elevation_gain_m: float = 0.0,
     elevation_loss_m: float = 0.0,
     net_elevation_change_m: float = 0.0,
@@ -45,7 +44,6 @@ def _make_input(
         confidence=confidence,
         overspeed_ratio=overspeed_ratio,
         stop_go_density=stop_go_density,
-        style=style,
         elevation_gain_m=elevation_gain_m,
         elevation_loss_m=elevation_loss_m,
         net_elevation_change_m=net_elevation_change_m,
@@ -69,15 +67,19 @@ def test_short_trip_commentary_is_hidden() -> None:
     assert commentary is None
 
 
-def test_normal_city_commentary_stays_direct() -> None:
-    """常规风格下应输出直接、克制的点评。"""
+def test_smooth_city_commentary_uses_warm_but_not_roast_tone() -> None:
+    """平顺城市通勤应给正反馈，不应硬吐槽。"""
     commentary = build_trip_commentary(_make_input(drive_id=202))
 
-    assert commentary == "动作利落，通勤状态在线"
+    assert commentary is not None
+    assert "通勤节奏" in commentary
+    assert "未检测到明显急加速和急减速" in commentary
+    assert "上头" not in commentary
+    assert "脚下戏" not in commentary
 
 
-def test_aggressive_highway_fast_commentary_uses_playful_tone() -> None:
-    """激进风格下，高速偏快场景应命中更年轻化的文案。"""
+def test_fast_highway_commentary_warns_about_speed_margin() -> None:
+    """高速偏快场景应给出速度余量提醒。"""
     commentary = build_trip_commentary(
         _make_input(
             drive_id=303,
@@ -93,35 +95,17 @@ def test_aggressive_highway_fast_commentary_uses_playful_tone() -> None:
             confidence=1.0,
             stop_go_density=0.4,
             overspeed_ratio=0.18,
-            style="aggressive",
         )
     )
 
-    assert commentary == "秋名山车神附身，后段收一收"
+    assert commentary is not None
+    assert "高速" in commentary
+    assert "峰值 134 km/h" in commentary
+    assert "高速段建议多留速度余量" in commentary
 
 
-def test_aggressive_slow_clear_commentary_can_roast_driver() -> None:
-    """路况顺但开得过慢时，激进风格允许更直接的吐槽。"""
-    commentary = build_trip_commentary(
-        _make_input(
-            drive_id=408,
-            distance_km=18.0,
-            duration_min=54.0,
-            avg_speed_kmh=20.0,
-            max_speed_kmh=48.0,
-            road_context="综合路况",
-            traffic_label="整体畅通",
-            stop_go_density=0.6,
-            confidence=1.0,
-            style="aggressive",
-        )
-    )
-
-    assert commentary == "路况都顺了，你是行走的路障吗"
-
-
-def test_normal_congested_commentary_stays_cautious() -> None:
-    """拥堵且动作偏急时，常规风格应优先给出收敛提醒。"""
+def test_congested_hard_brake_commentary_uses_roast_only_when_risky() -> None:
+    """拥堵且急刹明显时允许轻吐槽，并给出可执行建议。"""
     commentary = build_trip_commentary(
         _make_input(
             drive_id=404,
@@ -139,11 +123,14 @@ def test_normal_congested_commentary_stays_cautious() -> None:
         )
     )
 
-    assert commentary == "堵车已经够忙了，脚下再柔一点"
+    assert commentary is not None
+    assert "脚下戏" in commentary
+    assert "路况明显拥堵" in commentary
+    assert "少用急刹收尾" in commentary
 
 
-def test_long_trip_commentary_is_deterministic() -> None:
-    """同一输入应稳定命中同一句文案，避免重复渲染抖动。"""
+def test_commentary_is_deterministic_for_same_input() -> None:
+    """同一输入应稳定输出同一句文案，避免重复渲染抖动。"""
     trip_input = _make_input(
         drive_id=500,
         distance_km=126.0,
@@ -157,12 +144,12 @@ def test_long_trip_commentary_is_deterministic() -> None:
     first = build_trip_commentary(trip_input)
     second = build_trip_commentary(trip_input)
 
-    assert first == "里程拉长了，动作还是稳的"
+    assert first is not None
     assert second == first
 
 
-def test_aggressive_hilly_commentary_uses_terrain_feature() -> None:
-    """起伏明显的山路行程应命中地形文案，而不是退回普通模板。"""
+def test_mountainous_commentary_uses_terrain_feature() -> None:
+    """起伏明显的山路行程应展示地形原因。"""
     commentary = build_trip_commentary(
         _make_input(
             drive_id=612,
@@ -172,7 +159,6 @@ def test_aggressive_hilly_commentary_uses_terrain_feature() -> None:
             max_speed_kmh=78.0,
             road_context="综合路况",
             confidence=1.0,
-            style="aggressive",
             elevation_gain_m=320.0,
             elevation_loss_m=280.0,
             net_elevation_change_m=40.0,
@@ -180,12 +166,14 @@ def test_aggressive_hilly_commentary_uses_terrain_feature() -> None:
         )
     )
 
-    assert commentary == "高低差都拉满了，你居然还稳住了"
+    assert commentary is not None
+    assert "山路起伏" in commentary
+    assert "地形起伏 23 m/km" in commentary
 
 
-def test_aggressive_uphill_finish_commentary_uses_net_climb_feature() -> None:
-    """持续爬升且海拔明显抬升时，应命中爬升收官类文案。"""
-    commentary = build_trip_commentary(
+def test_uphill_and_downhill_commentary_use_net_elevation_change() -> None:
+    """持续爬升和持续下坡应展示净海拔变化。"""
+    uphill = build_trip_commentary(
         _make_input(
             drive_id=714,
             distance_km=21.0,
@@ -196,20 +184,13 @@ def test_aggressive_uphill_finish_commentary_uses_net_climb_feature() -> None:
             traffic_label="整体畅通",
             stop_go_density=0.8,
             confidence=1.0,
-            style="aggressive",
             elevation_gain_m=260.0,
             elevation_loss_m=40.0,
             net_elevation_change_m=220.0,
             terrain_variation_m_per_km=14.5,
         )
     )
-
-    assert commentary == "海拔一路上扬，你还真没上头"
-
-
-def test_aggressive_downhill_finish_commentary_uses_net_drop_feature() -> None:
-    """持续下切且收放平顺时，应命中下坡收官方向的文案。"""
-    commentary = build_trip_commentary(
+    downhill = build_trip_commentary(
         _make_input(
             drive_id=730,
             distance_km=20.0,
@@ -220,7 +201,6 @@ def test_aggressive_downhill_finish_commentary_uses_net_drop_feature() -> None:
             traffic_label="整体畅通",
             stop_go_density=0.8,
             confidence=1.0,
-            style="aggressive",
             elevation_gain_m=20.0,
             elevation_loss_m=260.0,
             net_elevation_change_m=-220.0,
@@ -228,36 +208,15 @@ def test_aggressive_downhill_finish_commentary_uses_net_drop_feature() -> None:
         )
     )
 
-    assert commentary == "一路往下放坡，收放居然挺稳"
+    assert uphill is not None
+    assert downhill is not None
+    assert "净爬升 220 m" in uphill
+    assert "净下坡 220 m" in downhill
 
 
-def test_aggressive_mountain_commentary_uses_large_variation_feature() -> None:
-    """高低差很大的山路场景，应能命中高低差专项文案。"""
-    commentary = build_trip_commentary(
-        _make_input(
-            drive_id=713,
-            distance_km=28.0,
-            duration_min=42.0,
-            avg_speed_kmh=40.0,
-            max_speed_kmh=88.0,
-            road_context="综合路况",
-            traffic_label="整体畅通",
-            stop_go_density=0.8,
-            confidence=1.0,
-            style="aggressive",
-            elevation_gain_m=360.0,
-            elevation_loss_m=340.0,
-            net_elevation_change_m=20.0,
-            terrain_variation_m_per_km=25.0,
-        )
-    )
-
-    assert commentary == "高低差都拉满了，你居然还稳住了"
-
-
-def test_normal_endurance_commentary_uses_multi_hour_feature() -> None:
-    """连续驾驶数小时应命中耐力型专项文案。"""
-    commentary = build_trip_commentary(
+def test_endurance_and_roadtrip_commentary_include_rest_advice() -> None:
+    """连续驾驶和长途行程应给出休息提醒。"""
+    endurance = build_trip_commentary(
         _make_input(
             drive_id=811,
             distance_km=148.0,
@@ -268,16 +227,9 @@ def test_normal_endurance_commentary_uses_multi_hour_feature() -> None:
             traffic_label="整体畅通",
             stop_go_density=1.1,
             confidence=1.0,
-            style="normal",
         )
     )
-
-    assert commentary == "🛣️ 连开几小时还稳得住，耐力真在线"
-
-
-def test_aggressive_roadtrip_commentary_uses_human_tone() -> None:
-    """几百公里的一口气长途应命中更有活人感的夸赞。"""
-    commentary = build_trip_commentary(
+    roadtrip = build_trip_commentary(
         _make_input(
             drive_id=802,
             distance_km=286.0,
@@ -288,28 +240,12 @@ def test_aggressive_roadtrip_commentary_uses_human_tone() -> None:
             traffic_label="整体畅通",
             stop_go_density=0.5,
             confidence=1.0,
-            style="aggressive",
         )
     )
 
-    assert commentary == "几百公里一口气拿下，牛逼啊🐮"
-
-
-def test_aggressive_highway_slow_commentary_feels_more_human() -> None:
-    """高速路况空出来但速度过慢时，应命中更口语化的吐槽文案。"""
-    commentary = build_trip_commentary(
-        _make_input(
-            drive_id=804,
-            distance_km=50.0,
-            duration_min=52.0,
-            avg_speed_kmh=58.0,
-            max_speed_kmh=88.0,
-            road_context="高速巡航",
-            traffic_label="整体畅通",
-            stop_go_density=0.3,
-            confidence=1.0,
-            style="aggressive",
-        )
-    )
-
-    assert commentary == "路况这么通畅，还佛系巡航，节奏可以再放开些"
+    assert endurance is not None
+    assert roadtrip is not None
+    assert "连续驾驶时间不短" in endurance
+    assert "这趟长途完成得比较稳" in roadtrip
+    assert "长时间驾驶注意中途休息" in endurance
+    assert "长时间驾驶注意中途休息" in roadtrip
