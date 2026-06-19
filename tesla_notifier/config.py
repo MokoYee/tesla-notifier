@@ -55,6 +55,7 @@ class Config:
             "https://static.vecteezy.com/system/resources/previews/020/975/563/non_2x/tesla-logo-tesla-icon-transparent-free-png.png"
         )
     )
+    grafana_base_url: str = field(default_factory=lambda: os.getenv("GRAFANA_BASE_URL", ""))
 
     # 高德地图
     amap_key: str = field(default_factory=lambda: os.getenv("AMAP_KEY", ""))

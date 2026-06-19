@@ -487,6 +487,7 @@ async def send_trip_end(
     speed_max: float | None = None,
     odometer: float | None = None,
     trip_id: int | None = None,
+    detail_url: str | None = None,
 ) -> bool:
     """发送行程结束推送"""
     soc_diff = end_soc - start_soc
@@ -558,6 +559,7 @@ async def send_trip_end(
             body=_join_lines(lines),
             group="tesla-trip",
             icon=config.bark_icon,
+            url=detail_url,
             badge=1,
             meta=_build_meta(
                 event_id=build_event_id("trip-end", trip_id),
@@ -588,6 +590,7 @@ async def send_charging_complete(
     outside_temp: float | None = None,
     cost: float | None = None,
     charging_id: int | None = None,
+    detail_url: str | None = None,
 ) -> bool:
     """发送充电完成推送"""
     subtitle = _join_subtitle_parts(
@@ -629,6 +632,7 @@ async def send_charging_complete(
             body=_join_lines(lines),
             group="tesla-charging",
             icon=config.bark_icon,
+            url=detail_url,
             badge=1,
             meta=_build_meta(
                 event_id=build_event_id("charging-complete", charging_id),

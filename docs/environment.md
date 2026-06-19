@@ -44,6 +44,7 @@
 | `BARK_URL` | `https://api.day.app` | 否 | Bark 服务地址，自建服务时改为自建地址 |
 | `BARK_KEY` | 空 | 是 | Bark 推送 key |
 | `BARK_ICON` | Tesla Logo URL | 否 | 推送图标 URL |
+| `GRAFANA_BASE_URL` | 空 | 否 | TeslaMate Grafana 访问地址，配置后行程和充电通知可点击进入详情页 |
 
 ## 第三方服务
 

@@ -15,6 +15,10 @@ load_dotenv()
 
 from tesla_notifier.analytics.traffic import TrafficSampler
 from tesla_notifier.config import config
+from tesla_notifier.integrations.grafana import (
+    build_charge_details_url,
+    build_drive_details_url,
+)
 from tesla_notifier.integrations.weather import (
     generate_weather_suggestion,
     get_weather,
@@ -166,6 +170,12 @@ async def _send_trip_notification(
         speed_max=trip.speed_max,
         odometer=trip.odometer,
         trip_id=trip.id,
+        detail_url=build_drive_details_url(
+            drive_id=trip.id,
+            car_id=trip.car_id,
+            start_time=trip.start_date,
+            end_time=trip.end_date,
+        ),
     )
 
     if success:
@@ -550,6 +560,12 @@ async def handle_charging_complete() -> None:
                 end_range=charging.end_rated_range_km,
                 outside_temp=charging.outside_temp_avg,
                 charging_id=charging.id,
+                detail_url=build_charge_details_url(
+                    charging_process_id=charging.id,
+                    car_id=charging.car_id,
+                    start_time=charging.start_date,
+                    end_time=charging.end_date,
+                ),
             )
 
             if success:
@@ -918,6 +934,7 @@ async def run() -> None:
     logger.info(f"  MIN_TRIP_DISTANCE: {config.min_trip_distance}")
     logger.info(f"  MQTT_URL: {config.mqtt_url if config.mqtt_enabled else '(未启用)'}")
     logger.info(f"  BARK_KEY: {'(已配置)' if config.bark_key else '(未配置)'}")
+    logger.info(f"  GRAFANA_BASE_URL: {'(已配置)' if config.grafana_base_url else '(未配置)'}")
     logger.info(f"  AMAP_KEY: {'(已配置)' if config.amap_key else '(未配置)'}")
     logger.info(f"  TZ: {config.timezone}")
     logger.info(f"天气服务状态: {_get_weather_service_status()}")

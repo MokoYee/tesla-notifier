@@ -45,6 +45,7 @@ You can start from [`.env.example`](../.env.example) or use [`docker-compose.yml
 | `BARK_URL` | `https://api.day.app` | No | Bark service URL. Use your self-hosted endpoint if applicable |
 | `BARK_KEY` | empty | Yes | Bark push key |
 | `BARK_ICON` | Tesla logo URL | No | Push icon URL |
+| `GRAFANA_BASE_URL` | empty | No | TeslaMate Grafana base URL. When set, trip and charging notifications link to detail dashboards |
 
 ## Third-Party Services
 
