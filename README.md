@@ -53,48 +53,42 @@
 
 ## 快速开始
 
-推荐直接合并到你现有的 TeslaMate `docker-compose.yml` 中。这样最省心，不需要理解外部网络，也不用单独维护第二份部署文件。
+推荐使用一键安装脚本。脚本会自动查找 TeslaMate 的 Docker Compose 配置，读取 PostgreSQL、MQTT 和 Docker 网络信息，然后在 TeslaMate 目录旁边创建独立的 `tesla-notifier/` 部署目录，不修改原 TeslaMate 配置。
 
-### 1. 下载 `.env` 模板
-
-```bash
-curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.example
-```
-
-### 2. 编辑 `.env`
-
-- 至少填写 `BARK_KEY`
-- 如果你的 TeslaMate 数据库不是默认密码，再修改 `DB_PASSWORD`
-- 默认模板已适配 TeslaMate 标准服务名：`DB_HOST=database`、`MQTT_URL=mqtt://mosquitto:1883`
-
-### 3. 在 TeslaMate 的 compose 中加入服务
-
-```yaml
-services:
-  tesla-notifier:
-    image: mokoyee/tesla-notifier:latest
-    container_name: tesla-notifier
-    restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-```
-
-然后启动：
+在 TeslaMate 所在服务器执行：
 
 ```bash
-docker compose up -d tesla-notifier
+curl -fsSL https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/install.sh | bash
+```
+
+脚本会提示输入：
+
+- `BARK_KEY`：默认使用官方 Bark 服务 `https://api.day.app`
+- `AMAP_KEY`：可选；配置后启用中文地址、天气和行程路况分析
+
+如果你希望先查看脚本内容再执行：
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/install.sh
+bash install.sh
+```
+
+安装完成后查看日志：
+
+```bash
+cd tesla-notifier
+docker compose logs -f tesla-notifier
 ```
 
 更新镜像：
 
 ```bash
+cd tesla-notifier
 docker compose pull tesla-notifier && docker compose up -d tesla-notifier
 ```
 
 <details>
-<summary>如果你更喜欢把 notifier 单独维护</summary>
+<summary>手动部署</summary>
 
 可以直接使用仓库里的 [`docker-compose.yml`](docker-compose.yml) 作为独立部署模板。  
 这种方式需要把 notifier 接入 TeslaMate 所在的 Docker 外部网络。

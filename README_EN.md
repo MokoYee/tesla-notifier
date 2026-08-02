@@ -52,48 +52,42 @@ An iPhone notification companion powered by TeslaMate data, delivering trip, cha
 
 ## Quick Start
 
-The simplest setup is to merge `tesla-notifier` into your existing TeslaMate `docker-compose.yml`. This avoids external-network setup and keeps everything in one stack.
+The recommended setup is the one-click installer. It detects your TeslaMate Docker Compose file, reads PostgreSQL, MQTT, and Docker network settings, then creates a separate `tesla-notifier/` deployment directory next to TeslaMate. Your original TeslaMate compose file is not modified.
 
-### 1. Download the `.env` template
-
-```bash
-curl -o .env https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/.env.example
-```
-
-### 2. Edit `.env`
-
-- Set `BARK_KEY`
-- Update `DB_PASSWORD` if your TeslaMate database password is not the default
-- The default template already matches a standard TeslaMate stack: `DB_HOST=database`, `MQTT_URL=mqtt://mosquitto:1883`
-
-### 3. Add the service to your TeslaMate compose file
-
-```yaml
-services:
-  tesla-notifier:
-    image: mokoyee/tesla-notifier:latest
-    container_name: tesla-notifier
-    restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-```
-
-Then start it:
+Run this on the server where TeslaMate is deployed:
 
 ```bash
-docker compose up -d tesla-notifier
+curl -fsSL https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/install.sh | bash
+```
+
+The installer will ask for:
+
+- `BARK_KEY`: uses the official Bark service `https://api.day.app` by default
+- `AMAP_KEY`: optional; enables Chinese addresses, weather, and traffic-aware trip analysis
+
+If you prefer to inspect the script before running it:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/MokoYee/tesla-notifier/main/install.sh
+bash install.sh
+```
+
+After installation, view logs with:
+
+```bash
+cd tesla-notifier
+docker compose logs -f tesla-notifier
 ```
 
 Update the image:
 
 ```bash
+cd tesla-notifier
 docker compose pull tesla-notifier && docker compose up -d tesla-notifier
 ```
 
 <details>
-<summary>If you prefer to manage notifier as a separate stack</summary>
+<summary>Manual deployment</summary>
 
 You can use the repository [`docker-compose.yml`](docker-compose.yml) as a standalone deployment template.  
 In that mode, notifier must join the Docker external network used by TeslaMate.
