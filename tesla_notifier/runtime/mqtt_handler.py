@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import paho.mqtt.client as mqtt
@@ -22,6 +22,8 @@ TIRE_LABELS = {
     "rl": "左后",
     "rr": "右后",
 }
+DEPARTURE_SAFETY_FRESHNESS_BUFFER_SEC = 30.0
+DEPARTURE_SAFETY_OPEN_STATE_PRE_DEPARTURE_GRACE_SEC = 15.0
 
 AsyncCallback = Callable[[], Coroutine[Any, Any, None]]
 AsyncSentryDeactivatedCallback = Callable[
@@ -75,7 +77,9 @@ class VehicleState:
     tpms_soft_warning_rl: bool | None = None
     tpms_soft_warning_rr: bool | None = None
     initialized_topics: set[str] = field(default_factory=set)
+    bool_topic_updated_at: dict[str, datetime] = field(default_factory=dict)
     departure_check_session_id: int = 0
+    departure_detected_at: datetime | None = None
     departure_alert_sent: bool = False
     departure_last_alert_time: datetime | None = None
     last_tire_alert_time: datetime | None = None
@@ -474,11 +478,16 @@ class MqttHandler:
 
         if current_value:
             self.vehicle_state.departure_check_session_id += 1
+            self.vehicle_state.departure_detected_at = None
             self.vehicle_state.departure_alert_sent = False
             return
 
         if prev_value is True and not current_value:
             self.vehicle_state.departure_check_session_id += 1
+            self.vehicle_state.departure_detected_at = (
+                self.vehicle_state.bool_topic_updated_at.get("is_user_present")
+                or datetime.now()
+            )
             self.vehicle_state.departure_alert_sent = False
             session_id = self.vehicle_state.departure_check_session_id
 
@@ -862,6 +871,7 @@ class MqttHandler:
 
         prev_value = getattr(self.vehicle_state, attr_name)
         setattr(self.vehicle_state, attr_name, current_value)
+        self.vehicle_state.bool_topic_updated_at[topic_key] = datetime.now()
         is_initial = self._mark_initialized(topic_key)
         return prev_value, current_value, is_initial
 
@@ -958,24 +968,110 @@ class MqttHandler:
     def get_departure_safety_issues(self) -> list[str]:
         """获取当前离车后的安全风险列表。"""
         issues: list[str] = []
+        now = datetime.now()
 
-        if self.vehicle_state.locked is False:
+        if self._has_reliable_departure_risk(
+            topic_key="locked",
+            attr_name="locked",
+            risky_value=False,
+            now=now,
+            require_post_departure_refresh=True,
+        ):
             issues.append("车辆未锁定")
-        if self.vehicle_state.windows_open is True:
+        if self._has_reliable_departure_risk(
+            topic_key="windows_open",
+            attr_name="windows_open",
+            risky_value=True,
+            now=now,
+        ):
             issues.append("车窗未关闭")
-        if self.vehicle_state.doors_open is True:
+        if self._has_reliable_departure_risk(
+            topic_key="doors_open",
+            attr_name="doors_open",
+            risky_value=True,
+            now=now,
+        ):
             issues.append("车门未关闭")
-        if self.vehicle_state.trunk_open is True:
+        if self._has_reliable_departure_risk(
+            topic_key="trunk_open",
+            attr_name="trunk_open",
+            risky_value=True,
+            now=now,
+        ):
             issues.append("后备箱未关闭")
-        if self.vehicle_state.frunk_open is True:
+        if self._has_reliable_departure_risk(
+            topic_key="frunk_open",
+            attr_name="frunk_open",
+            risky_value=True,
+            now=now,
+        ):
             issues.append("前备箱未关闭")
         if (
-            self.vehicle_state.charge_port_door_open is True
+            self._has_reliable_departure_risk(
+                topic_key="charge_port_door_open",
+                attr_name="charge_port_door_open",
+                risky_value=True,
+                now=now,
+            )
             and self.vehicle_state.plugged_in is not True
         ):
             issues.append("充电口未关闭")
 
         return issues
+
+    def _has_reliable_departure_risk(
+        self,
+        *,
+        topic_key: str,
+        attr_name: str,
+        risky_value: bool,
+        now: datetime,
+        require_post_departure_refresh: bool = False,
+    ) -> bool:
+        """判断离车安全风险是否来自可信的新鲜状态。"""
+        if getattr(self.vehicle_state, attr_name) is not risky_value:
+            return False
+
+        if self._is_departure_safety_topic_fresh(
+            topic_key,
+            now=now,
+            require_post_departure_refresh=require_post_departure_refresh,
+        ):
+            return True
+
+        logger.info(f"离车安全跳过 {topic_key} 风险：状态未在离车后可靠刷新")
+        return False
+
+    def _is_departure_safety_topic_fresh(
+        self,
+        topic_key: str,
+        *,
+        now: datetime,
+        require_post_departure_refresh: bool,
+    ) -> bool:
+        """校验离车安全状态是否足够新，避免 MQTT 旧缓存误报。"""
+        updated_at = self.vehicle_state.bool_topic_updated_at.get(topic_key)
+        if updated_at is None:
+            return False
+
+        max_age_seconds = max(
+            float(config.departure_safety_delay) + DEPARTURE_SAFETY_FRESHNESS_BUFFER_SEC,
+            60.0,
+        )
+        if (now - updated_at).total_seconds() > max_age_seconds:
+            return False
+
+        departure_at = self.vehicle_state.departure_detected_at
+        if departure_at is None:
+            return True
+
+        if require_post_departure_refresh:
+            return updated_at > departure_at
+
+        earliest_reliable_time = departure_at - timedelta(
+            seconds=DEPARTURE_SAFETY_OPEN_STATE_PRE_DEPARTURE_GRACE_SEC
+        )
+        return updated_at >= earliest_reliable_time
 
     def _get_active_tire_warnings(self) -> list[str]:
         """获取当前处于软告警的轮胎列表。"""
