@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -156,20 +156,10 @@ class DrivingSummary:
 class DrivingScore:
     """驾驶评分"""
 
-    hard_accel_count: int  # 急加速次数
-    hard_brake_count: int  # 急减速次数
     score: int  # 100 分制总分
     label: str  # 分档标签，如“优秀 / 稳健 / 正常 / 需注意 / 激进”
-    road_context: str  # 路况标签，如“城市通勤 / 高速巡航 / 综合路况”
-    hard_accel_rate: float  # 每 100 km 急加速次数
-    hard_brake_rate: float  # 每 100 km 急减速次数
-    confidence: float  # 样本置信度，主要用于短途平滑
     trip_commentary: str | None  # 行程点评
-    driving_insights: list[str] = field(default_factory=list)  # 行程解释要点
-    traffic_label: str | None = None  # 行程交通画像
-    traffic_summary: str | None = None  # 行程交通摘要
-    traffic_sample_count: int = 0  # 路况采样次数
-    traffic_stress_index: float | None = None  # 路况压力指数
+    key_factors: list[str]  # 通知中展示的关键因素
 
 
 @dataclass
@@ -968,11 +958,11 @@ def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(value, upper))
 
 
-def _rate_per_100km(event_count: int, distance_km: float) -> float:
-    """将事件数归一化为每 100 km 频次"""
+def _normalized_event_rate(event_count: int, distance_km: float) -> float:
+    """按最少 15 km 的有效暴露量归一化事件频次，抑制短途分母放大。"""
     if distance_km <= 0:
         return 0.0
-    return (event_count / distance_km) * 100
+    return (event_count / max(distance_km, 15.0)) * 100
 
 
 def _calculate_score_label(score: int) -> str:
@@ -1073,10 +1063,10 @@ def _build_driving_context(
 
 
 def _build_terrain_context(
-    elevation_data: list[float],
+    elevation_data: list[tuple[float, datetime]],
     distance_km: float,
 ) -> TerrainContext:
-    """基于海拔序列提取爬坡、下坡与起伏强度。"""
+    """基于海拔时序提取地形特征，并过滤 GPS 瞬时跳变。"""
     if len(elevation_data) < 2 or distance_km <= 0:
         return TerrainContext(
             elevation_gain_m=0.0,
@@ -1087,11 +1077,37 @@ def _build_terrain_context(
 
     gain_m = 0.0
     loss_m = 0.0
-    start_elevation = elevation_data[0]
+    start_elevation, start_time = elevation_data[0]
     last_elevation = start_elevation
+    last_elevation_time = start_time
+    last_observed_time = start_time
     anchor_elevation = start_elevation
+    recovering_from_jump = False
 
-    for elevation in elevation_data[1:]:
+    for elevation, observed_at in elevation_data[1:]:
+        interval_seconds = max((observed_at - last_observed_time).total_seconds(), 0.0)
+        direct_step_limit_m = max(8.0, min(interval_seconds, 10.0) * 3.0)
+
+        if not recovering_from_jump and abs(elevation - last_elevation) > direct_step_limit_m:
+            recovering_from_jump = True
+            last_observed_time = observed_at
+            continue
+
+        if recovering_from_jump:
+            recovery_seconds = max((observed_at - last_elevation_time).total_seconds(), 0.0)
+            recovery_limit_m = min(30.0, 8.0 + recovery_seconds * 0.35)
+            if abs(elevation - last_elevation) > recovery_limit_m:
+                last_observed_time = observed_at
+                continue
+
+            # 异常区间的数据无法可靠归因，恢复后从新锚点继续累计。
+            recovering_from_jump = False
+            anchor_elevation = elevation
+            last_elevation = elevation
+            last_elevation_time = observed_at
+            last_observed_time = observed_at
+            continue
+
         delta = elevation - anchor_elevation
 
         # 过滤 GPS 小幅抖动，同时保留逐步累积后的真实爬升 / 下坡。
@@ -1103,6 +1119,8 @@ def _build_terrain_context(
             anchor_elevation = elevation
 
         last_elevation = elevation
+        last_elevation_time = observed_at
+        last_observed_time = observed_at
 
     net_change_m = last_elevation - start_elevation
     terrain_variation_m_per_km = (gain_m + loss_m) / max(distance_km, 1.0)
@@ -1201,7 +1219,6 @@ def _calculate_speed_discipline_penalty(
 
 
 def _build_trip_commentary(
-    drive_id: int,
     distance_km: float,
     duration_min: float,
     hard_accel_count: int,
@@ -1209,8 +1226,9 @@ def _build_trip_commentary(
     context: DrivingContext,
     hard_accel_rate: float,
     hard_brake_rate: float,
+    expected_accel_rate: float,
+    expected_brake_rate: float,
     confidence: float,
-    traffic_label: str | None,
     outside_temp_c: float | None,
     max_speed_kmh: float | None,
     terrain: TerrainContext,
@@ -1222,7 +1240,6 @@ def _build_trip_commentary(
     avg_speed_kmh = distance_km / (duration_min / 60.0) if duration_min > 0 else 0.0
     return build_trip_commentary(
         TripCommentaryInput(
-            drive_id=drive_id,
             distance_km=distance_km,
             duration_min=duration_min,
             avg_speed_kmh=avg_speed_kmh,
@@ -1231,8 +1248,9 @@ def _build_trip_commentary(
             hard_brake_rate=hard_brake_rate,
             hard_accel_count=hard_accel_count,
             hard_brake_count=hard_brake_count,
+            expected_accel_rate=expected_accel_rate,
+            expected_brake_rate=expected_brake_rate,
             road_context=context.road_context,
-            traffic_label=traffic_label,
             outside_temp_c=outside_temp_c,
             confidence=confidence,
             overspeed_ratio=context.overspeed_ratio,
@@ -1245,269 +1263,156 @@ def _build_trip_commentary(
     )
 
 
-def _build_driving_insights(
+def _build_trip_key_factors(
     *,
-    distance_km: float,
-    duration_min: float,
-    efficiency_wh_km: float,
     context: DrivingContext,
     terrain: TerrainContext,
     traffic_summary: TrafficSummary | None,
     outside_temp_c: float | None,
-    hard_accel_rate: float,
-    hard_brake_rate: float,
+    hard_accel_count: int,
+    hard_brake_count: int,
 ) -> list[str]:
-    """生成行程解释要点，只输出可由本地数据支撑的结论。"""
-    insights: list[str] = []
-    avg_speed_kmh = distance_km / (duration_min / 60.0) if duration_min > 0 else 0.0
-
-    scene_parts: list[str] = []
-    if context.highway_ratio >= 0.5:
-        scene_parts.append(f"高速占比约 {context.highway_ratio * 100:.0f}%")
-    elif context.urban_ratio >= 0.55:
-        scene_parts.append(f"城市低速占比约 {context.urban_ratio * 100:.0f}%")
-
-    if context.stop_go_density >= 3.0:
-        scene_parts.append(f"停走密度 {context.stop_go_density:.1f} 次/10km")
-    if avg_speed_kmh > 0:
-        scene_parts.append(f"均速 {avg_speed_kmh:.0f} km/h")
-    if scene_parts:
-        insights.append(f"路况结构：{'，'.join(scene_parts)}")
-
-    energy_factors = _build_energy_factor_labels(
-        efficiency_wh_km=efficiency_wh_km,
-        context=context,
-        terrain=terrain,
-        traffic_summary=traffic_summary,
-        outside_temp_c=outside_temp_c,
-    )
-    if energy_factors:
-        insights.append(f"能耗解释：{energy_factors}")
-
-    control_parts: list[str] = []
-    if hard_accel_rate <= 2.0 and hard_brake_rate <= 2.0:
-        control_parts.append("加减速动作很少")
-    elif hard_accel_rate >= 10.0 or hard_brake_rate >= 12.0:
-        control_parts.append("加减速动作偏密集")
-    elif hard_brake_rate >= 8.0:
-        control_parts.append("减速动作略多")
-    elif hard_accel_rate >= 7.0:
-        control_parts.append("加速动作略多")
-
-    if terrain.terrain_variation_m_per_km >= 18:
-        control_parts.append(f"地形起伏 {terrain.terrain_variation_m_per_km:.0f} m/km")
-    elif abs(terrain.net_elevation_change_m) >= 80:
-        direction = "爬升" if terrain.net_elevation_change_m > 0 else "下坡"
-        control_parts.append(f"净{direction} {abs(terrain.net_elevation_change_m):.0f} m")
-
-    if control_parts:
-        insights.append(f"驾驶画像：{'，'.join(control_parts)}")
-
-    return insights[:3]
-
-
-def _build_energy_factor_labels(
-    *,
-    efficiency_wh_km: float,
-    context: DrivingContext,
-    terrain: TerrainContext,
-    traffic_summary: TrafficSummary | None,
-    outside_temp_c: float | None,
-) -> str | None:
-    """提取本次能耗最可能的解释因素。"""
+    """提取最多三个不重复、可由本地数据直接支撑的关键因素。"""
     factors: list[str] = []
 
-    if efficiency_wh_km >= 190:
-        if context.highway_ratio >= 0.55:
-            factors.append("高速巡航占比较高")
-        if traffic_summary is not None and traffic_summary.stress_index >= 28:
-            factors.append("拥堵压力增加启停损耗")
-        if terrain.net_elevation_change_m >= 80:
-            factors.append("净爬升抬高能耗")
-        elif terrain.terrain_variation_m_per_km >= 18:
-            factors.append("沿途起伏明显")
-        if outside_temp_c is not None and (outside_temp_c <= 5 or outside_temp_c >= 32):
-            factors.append("外温对空调/电池效率不友好")
-    elif efficiency_wh_km <= 140 and context.overspeed_ratio <= 0.05:
-        factors.append("速度结构和能耗表现都比较克制")
-        if terrain.net_elevation_change_m <= -60:
-            factors.append("下坡路段有利于回收")
+    if context.highway_ratio >= 0.5:
+        factors.append(f"高速巡航 {context.highway_ratio * 100:.0f}%")
+    elif context.urban_ratio >= 0.55:
+        factors.append(f"城市低速 {context.urban_ratio * 100:.0f}%")
+    else:
+        factors.append(context.road_context)
 
-    if not factors and traffic_summary is not None and traffic_summary.sample_count > 0:
-        factors.append(f"路况画像为{traffic_summary.traffic_label}")
+    if hard_accel_count > 0 and hard_brake_count > 0:
+        factors.append(f"急加速 {hard_accel_count} 次、急减速 {hard_brake_count} 次")
+    elif hard_accel_count > 0:
+        factors.append(f"急加速 {hard_accel_count} 次")
+    elif hard_brake_count > 0:
+        factors.append(f"急减速 {hard_brake_count} 次")
+    else:
+        factors.append("无明显急加减速")
 
-    if not factors:
-        return None
+    if abs(terrain.net_elevation_change_m) >= 80:
+        direction = "爬升" if terrain.net_elevation_change_m > 0 else "下坡"
+        factors.append(f"净{direction} {abs(terrain.net_elevation_change_m):.0f} m")
+    elif terrain.terrain_variation_m_per_km >= 18:
+        factors.append(f"地形起伏 {terrain.terrain_variation_m_per_km:.0f} m/km")
+    elif traffic_summary is not None and traffic_summary.traffic_label != "整体畅通":
+        factors.append(f"沿途{traffic_summary.traffic_label}")
+    elif outside_temp_c is not None and outside_temp_c <= 5:
+        factors.append(f"低温 {outside_temp_c:.0f}°C")
+    elif outside_temp_c is not None and outside_temp_c >= 32:
+        factors.append(f"高温 {outside_temp_c:.0f}°C")
 
-    return "，".join(factors[:3])
+    return factors[:3]
 
 # ========== 急加速/急减速检测算法 ==========
-# 急加速检测参数
-ACCEL_SURGE_THRESHOLD = 50  # 功率突增阈值 (kW)，窗口内功率变化超过此值
-ACCEL_PEAK_THRESHOLD = 40   # 峰值功率阈值 (kW)，当前功率需达到此值
-ACCEL_SPEED_GAIN_MIN = 8    # 最小速度增量 (km/h)，避免把普通补电门误判为急加速
-ACCEL_MIN_SPEED = 15        # 最低速度限制 (km/h)，排除挪车和低速蠕行
-ACCEL_WINDOW_SIZE = 5       # 检测窗口大小（数据点数）
-ACCEL_COOLDOWN_SEC = 3      # 冷却时间（秒），避免同一次加速重复计数
+# 急加速检测参数。时间窗口不依赖 TeslaMate 的采样频率。
+ACCEL_SURGE_THRESHOLD = 50.0  # 功率突增阈值 (kW)
+ACCEL_PEAK_THRESHOLD = 40.0  # 峰值功率阈值 (kW)
+ACCEL_SPEED_GAIN_MIN = 10.0  # 最小速度增量 (km/h)
+ACCEL_RATE_MIN = 8.0  # 最小速度增长率 (km/h/s)
+ACCEL_MIN_SPEED = 15.0  # 最低速度限制 (km/h)
+ACCEL_WINDOW_SEC = 4.0
+ACCEL_MIN_INTERVAL_SEC = 0.75
+ACCEL_COOLDOWN_SEC = 5.0
 
 # 急减速检测参数
 #   1. 冬季电池温度低，动能回收受限，功率数据不准确
 #   2. 机械制动时功率可能为正值或接近 0
 #   3. 速度变化是减速的直接体现，更可靠
-BRAKE_SPEED_DROP_MIN = 6      # 最小速度下降量 (km/h)，避免微小减速被误判
-BRAKE_WINDOW_SIZE = 5         # 检测窗口大小（数据点数，约 3-4 秒）
-BRAKE_COOLDOWN_SEC = 2.5      # 冷却时间（秒），避免同一次减速重复计数
-BRAKE_MIN_SPEED = 10          # 最低速度限制 (km/h)，低于此速度不算急刹（停车抖动）
-
-
-def _get_brake_threshold(speed_kmh: float) -> float:
-    """根据速度获取减速率阈值
-
-    高速时稍宽松（高速刹车本身就更剧烈），低速时更严格。
-    这更符合人类对"急刹"的感知。
-
-    Args:
-        speed_kmh: 减速前的速度 (km/h)
-
-    Returns:
-        减速率阈值 (km/h/s)
-    """
-    if speed_kmh > 80:
-        return 6.5  # 高速稍宽松
-    elif speed_kmh > 50:
-        return 7.0  # 中速标准
-    else:
-        return 7.5  # 低速更严格
+BRAKE_SPEED_DROP_MIN = 12.0  # 最小速度下降量 (km/h)，过滤普通收速
+BRAKE_RATE_MIN = 9.0  # 最小速度下降率 (km/h/s)
+BRAKE_START_SPEED_MIN = 20.0  # 动作起始最低速度 (km/h)
+BRAKE_WINDOW_SEC = 3.0
+BRAKE_MIN_INTERVAL_SEC = 0.75
+BRAKE_COOLDOWN_SEC = 5.0
 
 
 def _count_hard_accel_events(motion_data: list[tuple[float, float, datetime]]) -> int:
-    """计算急加速事件数量
-
-    算法：检测“功率突增 + 速度明显提升”的复合事件
-    - 在 ACCEL_WINDOW_SIZE 个数据点的窗口内，如果功率从窗口最小值突增超过 ACCEL_SURGE_THRESHOLD
-    - 且当前功率达到 ACCEL_PEAK_THRESHOLD
-    - 且窗口内速度提升达到 ACCEL_SPEED_GAIN_MIN
-    - 且当前速度 >= ACCEL_MIN_SPEED
-    - 则计为 1 次急加速事件
-    - 事件之间需要间隔 ACCEL_COOLDOWN_SEC 秒才算新事件
-
-    Args:
-        motion_data: [(power, speed, timestamp), ...] 按时间排序的轨迹数据
-
-    Returns:
-        急加速事件数量
-    """
-    if len(motion_data) < ACCEL_WINDOW_SIZE + 1:
+    """按真实时间窗口检测“功率突增 + 速度明显提升”的复合事件。"""
+    if len(motion_data) < 2:
         return 0
 
     events = 0
     last_event_time: datetime | None = None
+    window_start = 0
 
-    for i in range(ACCEL_WINDOW_SIZE, len(motion_data)):
+    for i in range(1, len(motion_data)):
         power, speed, timestamp = motion_data[i]
 
-        if speed < ACCEL_MIN_SPEED:
-            continue
-
-        # 检查冷却期
         if (
-            last_event_time
-            and (timestamp - last_event_time).total_seconds() < ACCEL_COOLDOWN_SEC
+            speed < ACCEL_MIN_SPEED
+            or power < ACCEL_PEAK_THRESHOLD
+            or (
+                last_event_time is not None
+                and (timestamp - last_event_time).total_seconds() < ACCEL_COOLDOWN_SEC
+            )
         ):
             continue
 
-        window_slice = motion_data[i - ACCEL_WINDOW_SIZE : i]
-        window_min_power = min(d[0] for d in window_slice)
-        window_min_speed = min(d[1] for d in window_slice)
-
-        # 计算功率突增量
-        power_surge = power - window_min_power
-        speed_gain = speed - window_min_speed
-
-        # 判断是否为急加速事件
-        if (
-            power_surge >= ACCEL_SURGE_THRESHOLD
-            and power >= ACCEL_PEAK_THRESHOLD
-            and speed_gain >= ACCEL_SPEED_GAIN_MIN
+        while (
+            window_start < i
+            and (timestamp - motion_data[window_start][2]).total_seconds() > ACCEL_WINDOW_SEC
         ):
-            events += 1
-            last_event_time = timestamp
+            window_start += 1
+
+        for prior_power, prior_speed, prior_time in motion_data[window_start:i]:
+            interval_seconds = (timestamp - prior_time).total_seconds()
+            if interval_seconds < ACCEL_MIN_INTERVAL_SEC:
+                continue
+
+            speed_gain = speed - prior_speed
+            if (
+                power - prior_power >= ACCEL_SURGE_THRESHOLD
+                and speed_gain >= ACCEL_SPEED_GAIN_MIN
+                and speed_gain / interval_seconds >= ACCEL_RATE_MIN
+            ):
+                events += 1
+                last_event_time = timestamp
+                break
 
     return events
 
 
 def _count_hard_brake_events(speed_data: list[tuple[float, datetime]]) -> int:
-    """计算急减速事件数量
-
-    算法：检测速度骤降事件（基于速度变化率）
-    - 在 BRAKE_WINDOW_SIZE 个数据点的窗口内，找到最高速度点
-    - 计算从最高速度点到当前点的减速率 (km/h/s)
-    - 根据速度动态获取阈值（高速稍宽松，低速更严格）
-    - 如果减速率 >= 阈值 且速度下降 >= BRAKE_SPEED_DROP_MIN
-    - 且当前速度 >= BRAKE_MIN_SPEED（排除停车抖动）
-    - 则计为 1 次急减速事件
-    - 事件之间需要间隔 BRAKE_COOLDOWN_SEC 秒才算新事件
-
-    Args:
-        speed_data: [(speed, timestamp), ...] 按时间排序的速度数据
-
-    Returns:
-        急减速事件数量
-    """
-    if len(speed_data) < BRAKE_WINDOW_SIZE + 1:
+    """按真实时间窗口检测明显减速事件。"""
+    if len(speed_data) < 2:
         return 0
 
     events = 0
     last_event_time: datetime | None = None
+    window_start = 0
 
-    for i in range(BRAKE_WINDOW_SIZE, len(speed_data)):
+    for i in range(1, len(speed_data)):
         current_speed, current_time = speed_data[i]
 
-        # 跳过无效数据
-        if current_speed is None:
-            continue
-
-        # 低于最低速度限制不算急刹（停车前抖动）
-        if current_speed < BRAKE_MIN_SPEED:
-            continue
-
-        # 检查冷却期
         if (
-            last_event_time
+            last_event_time is not None
             and (current_time - last_event_time).total_seconds() < BRAKE_COOLDOWN_SEC
         ):
             continue
 
-        # 获取窗口内的数据，找到最高速度点
-        window_data = speed_data[i - BRAKE_WINDOW_SIZE : i]
-        max_speed = 0.0
-        max_speed_time: datetime | None = None
+        while (
+            window_start < i
+            and (current_time - speed_data[window_start][1]).total_seconds()
+            > BRAKE_WINDOW_SEC
+        ):
+            window_start += 1
 
-        for speed, timestamp in window_data:
-            if speed is not None and speed > max_speed:
-                max_speed = speed
-                max_speed_time = timestamp
+        for prior_speed, prior_time in speed_data[window_start:i]:
+            interval_seconds = (current_time - prior_time).total_seconds()
+            if interval_seconds < BRAKE_MIN_INTERVAL_SEC:
+                continue
 
-        if max_speed_time is None:
-            continue
-
-        # 计算速度下降量和时间间隔
-        speed_drop = max_speed - current_speed
-        time_span = (current_time - max_speed_time).total_seconds()
-
-        if time_span <= 0:
-            continue
-
-        # 计算减速率 (km/h/s)
-        decel_rate = speed_drop / time_span
-
-        # 根据速度获取动态阈值
-        threshold = _get_brake_threshold(max_speed)
-
-        # 判断是否为急减速事件
-        if decel_rate >= threshold and speed_drop >= BRAKE_SPEED_DROP_MIN:
-            events += 1
-            last_event_time = current_time
+            speed_drop = prior_speed - current_speed
+            if (
+                prior_speed >= BRAKE_START_SPEED_MIN
+                and speed_drop >= BRAKE_SPEED_DROP_MIN
+                and speed_drop / interval_seconds >= BRAKE_RATE_MIN
+            ):
+                events += 1
+                last_event_time = current_time
+                break
 
     return events
 
@@ -1531,12 +1436,8 @@ async def get_trip_driving_score(
                         distance,
                         duration_min,
                         outside_temp_avg,
-                        speed_max,
-                        start_rated_range_km,
-                        end_rated_range_km,
-                        c.efficiency * 1000 as car_efficiency_wh_km
+                        speed_max
                     FROM drives d
-                    JOIN cars c ON d.car_id = c.id
                     WHERE d.id = %s
                     """,
                     (drive_id,),
@@ -1550,16 +1451,6 @@ async def get_trip_driving_score(
                     else None
                 )
                 speed_max = float(drive_row[3]) if drive_row and drive_row[3] else None
-                rated_range_used = (
-                    max(float(drive_row[4] or 0) - float(drive_row[5] or 0), 0.0)
-                    if drive_row
-                    else 0.0
-                )
-                car_efficiency = (
-                    float(drive_row[6])
-                    if drive_row and drive_row[6] is not None
-                    else 150.0
-                )
 
                 # 获取该行程的所有位置数据（按时间排序）
                 await cur.execute(
@@ -1587,23 +1478,18 @@ async def get_trip_driving_score(
                 speed_data: list[tuple[float, datetime]] = [
                     (float(row[1]), row[3]) for row in rows if row[1] is not None
                 ]
-                elevation_data: list[float] = [
-                    float(row[2]) for row in rows if row[2] is not None
+                elevation_data: list[tuple[float, datetime]] = [
+                    (float(row[2]), row[3]) for row in rows if row[2] is not None
                 ]
 
                 # 计算急加速和急减速事件数
                 hard_accel_count = _count_hard_accel_events(motion_data)
                 hard_brake_count = _count_hard_brake_events(speed_data)
-                hard_accel_rate = _rate_per_100km(hard_accel_count, distance_km)
-                hard_brake_rate = _rate_per_100km(hard_brake_count, distance_km)
+                hard_accel_rate = _normalized_event_rate(hard_accel_count, distance_km)
+                hard_brake_rate = _normalized_event_rate(hard_brake_count, distance_km)
 
                 context = _build_driving_context(speed_data, distance_km)
                 terrain = _build_terrain_context(elevation_data, distance_km)
-                efficiency_wh_km = (
-                    (rated_range_used * car_efficiency) / distance_km
-                    if distance_km > 0
-                    else 0.0
-                )
                 expected_accel_rate, expected_brake_rate = _get_expected_event_rates(
                     context
                 )
@@ -1631,7 +1517,6 @@ async def get_trip_driving_score(
                 final_score = round(_clamp(blended_score, 0.0, 100.0))
                 label = _calculate_score_label(final_score)
                 trip_commentary = _build_trip_commentary(
-                    drive_id,
                     distance_km,
                     duration_min,
                     hard_accel_count,
@@ -1639,55 +1524,27 @@ async def get_trip_driving_score(
                     context,
                     hard_accel_rate,
                     hard_brake_rate,
+                    expected_accel_rate,
+                    expected_brake_rate,
                     confidence,
-                    traffic_summary.traffic_label if traffic_summary is not None else None,
                     outside_temp_avg,
                     speed_max,
                     terrain,
                 )
-                driving_insights = _build_driving_insights(
-                    distance_km=distance_km,
-                    duration_min=duration_min,
-                    efficiency_wh_km=efficiency_wh_km,
+                key_factors = _build_trip_key_factors(
                     context=context,
                     terrain=terrain,
                     traffic_summary=traffic_summary,
                     outside_temp_c=outside_temp_avg,
-                    hard_accel_rate=hard_accel_rate,
-                    hard_brake_rate=hard_brake_rate,
+                    hard_accel_count=hard_accel_count,
+                    hard_brake_count=hard_brake_count,
                 )
 
                 return DrivingScore(
-                    hard_accel_count=hard_accel_count,
-                    hard_brake_count=hard_brake_count,
                     score=final_score,
                     label=label,
-                    road_context=context.road_context,
-                    hard_accel_rate=hard_accel_rate,
-                    hard_brake_rate=hard_brake_rate,
-                    confidence=confidence,
                     trip_commentary=trip_commentary,
-                    driving_insights=driving_insights,
-                    traffic_label=(
-                        traffic_summary.traffic_label
-                        if traffic_summary is not None
-                        else None
-                    ),
-                    traffic_summary=(
-                        traffic_summary.summary
-                        if traffic_summary is not None
-                        else None
-                    ),
-                    traffic_sample_count=(
-                        traffic_summary.sample_count
-                        if traffic_summary is not None
-                        else 0
-                    ),
-                    traffic_stress_index=(
-                        traffic_summary.stress_index
-                        if traffic_summary is not None
-                        else None
-                    ),
+                    key_factors=key_factors,
                 )
     except Exception as e:
         logger.exception(f"查询行程驾驶评分失败: {e}")

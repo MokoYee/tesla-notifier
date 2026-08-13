@@ -32,7 +32,6 @@ class TripExpression(StrEnum):
 class TripCommentaryInput:
     """行程点评输入。"""
 
-    drive_id: int
     distance_km: float
     duration_min: float
     avg_speed_kmh: float
@@ -41,8 +40,9 @@ class TripCommentaryInput:
     hard_brake_rate: float
     hard_accel_count: int
     hard_brake_count: int
+    expected_accel_rate: float
+    expected_brake_rate: float
     road_context: str
-    traffic_label: str | None
     outside_temp_c: float | None
     confidence: float
     overspeed_ratio: float
@@ -58,18 +58,15 @@ class TripRisk:
     """行程风险画像。"""
 
     score: float
-    combined_rate: float
-    max_speed_kmh: float
+    accel_pressure: float
+    brake_pressure: float
 
 
 @dataclass(frozen=True, slots=True)
 class TripProfile:
     """结构化行程画像。"""
 
-    scene: TripScene
-    tone: TripTone
     conclusion: str
-    reason: str
     advice: str | None
 
 
@@ -102,30 +99,40 @@ def _build_profile(commentary_input: TripCommentaryInput) -> TripProfile:
     risk = _build_risk(commentary_input)
     tone = _classify_tone(commentary_input, risk)
     expression = _classify_expression(commentary_input, risk, tone)
-    conclusion = _build_conclusion(commentary_input, scene, tone, expression)
-    reason = _build_reason(commentary_input, scene, tone)
-    advice = _build_advice(commentary_input, scene, tone)
+    conclusion = _build_conclusion(commentary_input, risk, scene, tone, expression)
+    advice = _build_advice(commentary_input, risk, scene, tone)
     return TripProfile(
-        scene=scene,
-        tone=tone,
         conclusion=conclusion,
-        reason=reason,
         advice=advice,
     )
 
 
 def _build_risk(commentary_input: TripCommentaryInput) -> TripRisk:
-    """把多维驾驶信号压成稳定风险分。"""
-    combined_rate = commentary_input.hard_accel_rate + commentary_input.hard_brake_rate
+    """按场景基线与样本置信度计算驾驶压力。"""
     max_speed = max(commentary_input.avg_speed_kmh, commentary_input.max_speed_kmh or 0.0)
+    accel_pressure = commentary_input.hard_accel_rate / max(
+        commentary_input.expected_accel_rate,
+        1.0,
+    )
+    brake_pressure = commentary_input.hard_brake_rate / max(
+        commentary_input.expected_brake_rate,
+        1.0,
+    )
 
-    score = 0.0
-    score += _clamp((commentary_input.hard_brake_rate - 8.0) / 8.0, 0.0, 1.0) * 0.42
-    score += _clamp((commentary_input.hard_accel_rate - 8.0) / 8.0, 0.0, 1.0) * 0.30
-    score += _clamp((commentary_input.overspeed_ratio - 0.06) / 0.12, 0.0, 1.0) * 0.18
-    score += _clamp((max_speed - 128.0) / 18.0, 0.0, 1.0) * 0.16
-    score += _clamp((combined_rate - 14.0) / 10.0, 0.0, 1.0) * 0.20
-    return TripRisk(score=score, combined_rate=combined_rate, max_speed_kmh=max_speed)
+    action_score = 0.0
+    action_score += _clamp((brake_pressure - 1.0) / 1.5, 0.0, 1.0) * 0.45
+    action_score += _clamp((accel_pressure - 1.0) / 1.5, 0.0, 1.0) * 0.30
+    action_score *= 0.65 + 0.35 * commentary_input.confidence
+
+    speed_score = 0.0
+    speed_score += _clamp((commentary_input.overspeed_ratio - 0.06) / 0.12, 0.0, 1.0) * 0.18
+    speed_score += _clamp((max_speed - 128.0) / 18.0, 0.0, 1.0) * 0.16
+    score = action_score + speed_score
+    return TripRisk(
+        score=score,
+        accel_pressure=accel_pressure,
+        brake_pressure=brake_pressure,
+    )
 
 
 def _classify_tone(commentary_input: TripCommentaryInput, risk: TripRisk) -> TripTone:
@@ -136,13 +143,17 @@ def _classify_tone(commentary_input: TripCommentaryInput, risk: TripRisk) -> Tri
     ):
         return TripTone.CAUTION
 
-    if risk.score >= 0.42:
+    if risk.score >= 0.20:
         return TripTone.CAUTION
 
-    if risk.combined_rate <= 5.0 and commentary_input.overspeed_ratio <= 0.04:
+    if commentary_input.hard_accel_count == 0 and commentary_input.hard_brake_count == 0:
         return TripTone.POSITIVE
 
-    if commentary_input.hard_accel_count == 0 and commentary_input.hard_brake_count == 0:
+    if (
+        risk.accel_pressure <= 0.65
+        and risk.brake_pressure <= 0.65
+        and commentary_input.overspeed_ratio <= 0.04
+    ):
         return TripTone.POSITIVE
 
     return TripTone.NEUTRAL
@@ -155,7 +166,7 @@ def _classify_expression(
 ) -> TripExpression:
     """按真实特征决定表达强度。"""
     if tone == TripTone.CAUTION:
-        if risk.score >= 0.70 or _has_obvious_showy_driving(commentary_input):
+        if _has_obvious_showy_driving(commentary_input, risk):
             return TripExpression.ROAST
         return TripExpression.DIRECT
 
@@ -167,14 +178,19 @@ def _classify_expression(
     return TripExpression.DIRECT
 
 
-def _has_obvious_showy_driving(commentary_input: TripCommentaryInput) -> bool:
+def _has_obvious_showy_driving(
+    commentary_input: TripCommentaryInput,
+    risk: TripRisk,
+) -> bool:
     """是否存在值得轻吐槽的明显激进行为。"""
-    return (
-        commentary_input.hard_accel_rate >= 12.0
-        or commentary_input.hard_brake_rate >= 14.0
-        or commentary_input.overspeed_ratio >= 0.16
-        or (commentary_input.max_speed_kmh is not None and commentary_input.max_speed_kmh >= 136)
+    obvious_actions = commentary_input.confidence >= 0.65 and (
+        (commentary_input.hard_accel_count >= 4 and risk.accel_pressure >= 1.6)
+        or (commentary_input.hard_brake_count >= 4 and risk.brake_pressure >= 1.6)
     )
+    obvious_speed = commentary_input.overspeed_ratio >= 0.16 or (
+        commentary_input.max_speed_kmh is not None and commentary_input.max_speed_kmh >= 136
+    )
+    return obvious_actions or obvious_speed
 
 
 def _deserves_warmth(commentary_input: TripCommentaryInput) -> bool:
@@ -193,13 +209,14 @@ def _deserves_warmth(commentary_input: TripCommentaryInput) -> bool:
 
 def _build_conclusion(
     commentary_input: TripCommentaryInput,
+    risk: TripRisk,
     scene: TripScene,
     tone: TripTone,
     expression: TripExpression,
 ) -> str:
     """生成一句总判断。"""
     if expression == TripExpression.ROAST:
-        return _build_roast_conclusion(commentary_input, scene)
+        return _build_roast_conclusion(commentary_input, risk, scene)
 
     if _is_roadtrip(commentary_input):
         if tone == TripTone.CAUTION:
@@ -217,6 +234,14 @@ def _build_conclusion(
         return "山路起伏不少，整体控制住了"
 
     if tone == TripTone.CAUTION:
+        if _is_speed_risk(commentary_input):
+            if scene == TripScene.HIGHWAY:
+                return "高速巡航偏快，速度余量收一收"
+            return "这趟速度偏快，给自己多留点余量"
+        if risk.brake_pressure >= risk.accel_pressure:
+            return "减速动作偏多，提前松电门会更顺"
+        if risk.accel_pressure > 1.0:
+            return "加速动作偏多，电门再线性一点"
         if scene == TripScene.HIGHWAY:
             return "高速巡航节奏偏激进"
         if scene == TripScene.CITY:
@@ -235,23 +260,24 @@ def _build_conclusion(
 
 def _build_roast_conclusion(
     commentary_input: TripCommentaryInput,
+    risk: TripRisk,
     scene: TripScene,
 ) -> str:
     """生成轻吐槽结论，确保只在风险明显时出现。"""
-    if commentary_input.hard_brake_rate >= 14.0:
+    if commentary_input.hard_brake_count >= 4 and risk.brake_pressure >= 1.6:
         if scene == TripScene.CITY:
-            return "这趟城市路段脚下戏有点多"
-        return "这趟急减速有点抢戏"
+            return "城市路段刹车有点抢戏，预判可以再早一点"
+        return "这趟急减速有点抢戏，提前收一收节奏"
 
-    if commentary_input.hard_accel_rate >= 12.0:
-        return "这趟电门存在感有点强"
+    if commentary_input.hard_accel_count >= 4 and risk.accel_pressure >= 1.6:
+        return "这趟电门存在感有点强，线性一点会更舒服"
 
     if commentary_input.overspeed_ratio >= 0.16 or (
         commentary_input.max_speed_kmh is not None and commentary_input.max_speed_kmh >= 136
     ):
         if scene == TripScene.HIGHWAY:
-            return "这趟高速有点上头了"
-        return "这趟速度欲望有点藏不住"
+            return "这趟高速有点上头了，速度余量得留出来"
+        return "这趟速度欲望有点藏不住，还是要多留余量"
 
     return "这趟节奏有点抢戏"
 
@@ -272,47 +298,9 @@ def _build_positive_conclusion(scene: TripScene, expression: TripExpression) -> 
     return "这趟开得挺清爽，整体在线"
 
 
-def _build_reason(
-    commentary_input: TripCommentaryInput,
-    scene: TripScene,
-    tone: TripTone,
-) -> str:
-    """生成主因解释。"""
-    reasons: list[str] = []
-
-    if scene == TripScene.HIGHWAY:
-        reasons.append(f"均速 {commentary_input.avg_speed_kmh:.0f} km/h")
-        if commentary_input.max_speed_kmh is not None:
-            reasons.append(f"峰值 {commentary_input.max_speed_kmh:.0f} km/h")
-    elif scene == TripScene.CITY:
-        if commentary_input.stop_go_density >= 3.0:
-            reasons.append(f"停走密度 {commentary_input.stop_go_density:.1f} 次/10km")
-        else:
-            reasons.append(f"均速 {commentary_input.avg_speed_kmh:.0f} km/h")
-    else:
-        reasons.append(f"均速 {commentary_input.avg_speed_kmh:.0f} km/h")
-
-    if commentary_input.hard_accel_count or commentary_input.hard_brake_count:
-        reasons.append(
-            f"急加速 {commentary_input.hard_accel_count} 次、急减速 "
-            f"{commentary_input.hard_brake_count} 次"
-        )
-    elif tone == TripTone.POSITIVE:
-        reasons.append("未检测到明显急加速和急减速")
-
-    terrain_reason = _terrain_reason(commentary_input)
-    if terrain_reason:
-        reasons.append(terrain_reason)
-
-    traffic_reason = _traffic_reason(commentary_input)
-    if traffic_reason and len(reasons) < 3:
-        reasons.append(traffic_reason)
-
-    return "，".join(reasons[:3])
-
-
 def _build_advice(
     commentary_input: TripCommentaryInput,
+    risk: TripRisk,
     scene: TripScene,
     tone: TripTone,
 ) -> str | None:
@@ -324,14 +312,10 @@ def _build_advice(
             return "长时间驾驶注意中途休息"
         return None
 
-    if commentary_input.hard_brake_rate >= 9.0:
-        return "下一趟可以把预判再提前一点，少用急刹收尾"
-    if commentary_input.hard_accel_rate >= 9.0:
-        return "电门开度再线性一点，乘坐和能耗都会更好"
-    if commentary_input.overspeed_ratio >= 0.08 or (
-        commentary_input.max_speed_kmh is not None and commentary_input.max_speed_kmh >= 130
-    ):
-        return "高速段建议多留速度余量"
+    if _is_speed_risk(commentary_input):
+        return None
+    if risk.brake_pressure >= 1.0 or risk.accel_pressure >= 1.0:
+        return None
     if _is_mountainous(commentary_input):
         return "起伏路段提前控速，别等到坡顶坡底再修正"
     if scene == TripScene.CITY and commentary_input.stop_go_density >= 4.0:
@@ -343,25 +327,11 @@ def _build_advice(
     return "下一趟把节奏再放平一点"
 
 
-def _terrain_reason(commentary_input: TripCommentaryInput) -> str | None:
-    """生成地形原因。"""
-    if commentary_input.net_elevation_change_m >= 90:
-        return f"净爬升 {commentary_input.net_elevation_change_m:.0f} m"
-    if commentary_input.net_elevation_change_m <= -90:
-        return f"净下坡 {abs(commentary_input.net_elevation_change_m):.0f} m"
-    if commentary_input.terrain_variation_m_per_km >= 18:
-        return f"地形起伏 {commentary_input.terrain_variation_m_per_km:.0f} m/km"
-    return None
-
-
-def _traffic_reason(commentary_input: TripCommentaryInput) -> str | None:
-    """生成外部路况原因。"""
-    traffic_label = commentary_input.traffic_label
-    if traffic_label in {"明显拥堵", "高压拥堵"}:
-        return f"路况{traffic_label}"
-    if traffic_label == "轻度拥堵":
-        return "有轻度拥堵"
-    return None
+def _is_speed_risk(commentary_input: TripCommentaryInput) -> bool:
+    """是否存在明确的高速风险信号。"""
+    return commentary_input.overspeed_ratio >= 0.08 or (
+        commentary_input.max_speed_kmh is not None and commentary_input.max_speed_kmh >= 130
+    )
 
 
 def _is_endurance_trip(commentary_input: TripCommentaryInput) -> bool:
@@ -387,8 +357,8 @@ def _is_mountainous(commentary_input: TripCommentaryInput) -> bool:
 def _compose_commentary(profile: TripProfile) -> str:
     """组合最终点评句子。"""
     if profile.advice:
-        return f"{profile.conclusion}，{profile.reason}；{profile.advice}"
-    return f"{profile.conclusion}，{profile.reason}"
+        return f"{profile.conclusion}；{profile.advice}"
+    return profile.conclusion
 
 
 def build_trip_commentary(commentary_input: TripCommentaryInput) -> str | None:

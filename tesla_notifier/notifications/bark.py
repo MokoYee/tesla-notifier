@@ -168,54 +168,13 @@ def _format_trip_score(score: int, label: str) -> str:
     return f"🏁 评分参考 {score} 分 · {label}"
 
 
-def _format_trip_actions(
-    hard_accel_count: int,
-    hard_brake_count: int,
-) -> str:
-    """格式化驾驶动作摘要。"""
-    if hard_accel_count == 0 and hard_brake_count == 0:
-        return "📌 驾驶动作 · 未检测到急加速和急减速"
-    return f"📌 驾驶动作 · 急加速{hard_accel_count}次 · 急减速{hard_brake_count}次"
-
-
-def _format_trip_traffic_summary(
-    traffic_summary: str | None,
-    traffic_label: str | None,
-) -> str | None:
-    """清洗路况摘要里的内部统计词，避免直接暴露采样口径。"""
-    if not traffic_summary or not traffic_summary.strip():
-        return None
-
-    cleaned = re.sub(r"(?:^|[，,]\s*)采样\s*\d+\s*次(?:\s*[，,]|$)", "，", traffic_summary)
-    cleaned = re.sub(
-        r"(?:^|[，,]\s*)压力指数\s*\d+(?:\.\d+)?(?:\s*[，,]|$)",
-        "，",
-        cleaned,
-    )
-    cleaned = re.sub(r"\s*[,，]\s*", "，", cleaned)
-    cleaned = re.sub(r"，{2,}", "，", cleaned).strip("，, ")
-
-    if cleaned:
-        return cleaned
-
-    if traffic_label and traffic_label.strip():
-        return traffic_label.strip()
-
-    return None
-
-
 def _build_trip_analysis_lines(
-    hard_accel_count: int | None,
-    hard_brake_count: int | None,
     driving_score: int | None,
     driving_label: str | None,
-    road_context: str | None,
     trip_commentary: str | None,
-    driving_insights: list[str] | None,
-    traffic_label: str | None,
-    traffic_summary: str | None,
+    key_factors: list[str] | None,
 ) -> list[str]:
-    """按用户可读顺序组织行程分析区块。"""
+    """将行程分析压缩为评分、点评和关键因素三行。"""
     lines: list[str] = []
 
     if driving_score is not None and driving_label is not None:
@@ -224,24 +183,9 @@ def _build_trip_analysis_lines(
     if trip_commentary:
         lines.append(f"🧠 行程点评 · {trip_commentary}")
 
-    if driving_insights:
-        for insight in driving_insights[:3]:
-            if insight.strip():
-                lines.append(f"🔎 {insight}")
-
-    if hard_accel_count is not None and hard_brake_count is not None:
-        lines.append(_format_trip_actions(hard_accel_count, hard_brake_count))
-
-    formatted_traffic_summary = _format_trip_traffic_summary(traffic_summary, traffic_label)
-    scene_parts = []
-    if road_context:
-        scene_parts.append(road_context)
-    if formatted_traffic_summary:
-        scene_parts.append(formatted_traffic_summary)
-    elif traffic_label:
-        scene_parts.append(traffic_label)
-    if scene_parts:
-        lines.append(f"🧭 行驶场景 · {' · '.join(scene_parts)}")
+    normalized_factors = [factor.strip() for factor in key_factors or [] if factor.strip()]
+    if normalized_factors:
+        lines.append(f"📌 关键因素 · {' · '.join(normalized_factors[:3])}")
 
     return lines
 
@@ -481,15 +425,10 @@ async def send_trip_end(
     start_soc: int,
     end_soc: int,
     outside_temp: float | None = None,
-    hard_accel_count: int | None = None,
-    hard_brake_count: int | None = None,
     driving_score: int | None = None,
     driving_label: str | None = None,
-    road_context: str | None = None,
     trip_commentary: str | None = None,
-    driving_insights: list[str] | None = None,
-    traffic_label: str | None = None,
-    traffic_summary: str | None = None,
+    key_factors: list[str] | None = None,
     speed_avg: float | None = None,
     speed_max: float | None = None,
     odometer: float | None = None,
@@ -546,15 +485,10 @@ async def send_trip_end(
         lines.append(f"🛣️ 总里程 {odometer:.1f} km")
 
     analysis_lines = _build_trip_analysis_lines(
-        hard_accel_count=hard_accel_count,
-        hard_brake_count=hard_brake_count,
         driving_score=driving_score,
         driving_label=driving_label,
-        road_context=road_context,
         trip_commentary=trip_commentary,
-        driving_insights=driving_insights,
-        traffic_label=traffic_label,
-        traffic_summary=traffic_summary,
+        key_factors=key_factors,
     )
     if analysis_lines:
         lines.append("")
