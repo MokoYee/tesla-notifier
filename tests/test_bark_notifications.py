@@ -7,10 +7,10 @@ import pytest
 from tesla_notifier.notifications import bark
 
 
-def test_send_trip_end_merges_scene_and_traffic_and_hides_sampling_noise(
+def test_send_trip_end_compacts_analysis_into_three_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """行程结束通知应合并场景与路况，并隐藏内部采样术语。"""
+    """行程分析只保留评分、点评和关键因素，避免重复展示。"""
     captured: dict[str, str] = {}
 
     async def fake_send_notification(options: bark.BarkOptions) -> bool:
@@ -34,14 +34,10 @@ def test_send_trip_end_merges_scene_and_traffic_and_hides_sampling_noise(
             start_soc=78,
             end_soc=69,
             outside_temp=21.5,
-            hard_accel_count=2,
-            hard_brake_count=1,
             driving_score=91,
             driving_label="稳健",
-            road_context="城市通勤",
-            trip_commentary="几百公里一口气拿下，牛逼啊🐮",
-            traffic_label="整体畅通",
-            traffic_summary="整体畅通, 采样5次, 压力指数4.2",
+            trip_commentary="城市通勤为主，节奏正常",
+            key_factors=["城市低速 82%", "急加速 2 次、急减速 1 次"],
             speed_avg=43.2,
             speed_max=86.0,
             odometer=12345.6,
@@ -54,14 +50,15 @@ def test_send_trip_end_merges_scene_and_traffic_and_hides_sampling_noise(
     lines = body.splitlines()
 
     score_index = lines.index("🏁 评分参考 91 分 · 稳健")
-    commentary_index = lines.index("🧠 行程点评 · 几百公里一口气拿下，牛逼啊🐮")
-    actions_index = lines.index("📌 驾驶动作 · 急加速2次 · 急减速1次")
-    scene_index = lines.index("🧭 行驶场景 · 城市通勤 · 整体畅通")
+    commentary_index = lines.index("🧠 行程点评 · 城市通勤为主，节奏正常")
+    factors_index = lines.index("📌 关键因素 · 城市低速 82% · 急加速 2 次、急减速 1 次")
 
-    assert score_index < commentary_index < actions_index < scene_index
-    assert "采样" not in body
-    assert "压力指数" not in body
-    assert "🚦 沿途路况" not in body
+    assert score_index < commentary_index < factors_index
+    assert "🔎 路况结构" not in body
+    assert "🔎 能耗解释" not in body
+    assert "🔎 驾驶画像" not in body
+    assert "📌 驾驶动作" not in body
+    assert "🧭 行驶场景" not in body
 
 
 def test_send_sentry_recording_includes_rated_range(
