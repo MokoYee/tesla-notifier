@@ -10,46 +10,16 @@
 
 基于 TeslaMate 数据的 iPhone 通知插件，行程结束、充电完成、哨兵事件和离车安全提醒都会实时送达，让你随时掌握爱车动态。
 
-## 📸 推送示例
-<p align="center">
-  <a href=".github/assets/notify-featured.jpg">
-    <img src=".github/assets/notify-featured.jpg" alt="推送示例">
-  </a>
-</p>
+## 核心功能
 
-<details>
-  <summary>展开查看全部示例</summary>
-  <table>
-    <tr>
-      <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="日报与行程结束示例"></td>
-      <td width="50%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="哨兵通知示例"></td>
-    </tr>
-    <tr>
-      <td width="50%"><img src=".github/assets/notify-charging-complete.jpg" alt="充电完成示例"></td>
-      <td width="50%"><img src=".github/assets/notify-charging-alerts.jpg" alt="充电异常示例"></td>
-    </tr>
-  </table>
-</details>
-
-## 功能
-
-### 实时推送（MQTT 驱动）
-
-- **行程结束推送** - 行程结束后自动推送详情（起终点、里程、能耗、100 分制驾驶评分、本地匹配行程点评）
-- **充电完成推送** - 充电完成后推送充电详情（充入电量、峰值功率、AC/DC 类型、充电效率）
-- **哨兵模式推送** - 哨兵模式激活/关闭状态推送，支持实时录制事件提醒
-- **离车安全提醒** - 离车后检测未锁车、门窗未关、前后备箱未关、充电口未关
-- **胎压异常提醒** - 基于 TeslaMate `tpms_soft_warning_*` 实时推送异常轮位和胎压
-- **充电异常提醒** - 检测 `NoPower` 或充电提前停止且未达到目标电量的情况
-- **行程路况分析** - 可选接入高德交通态势，低频采样后并入行程评分与点评文案
-- **通知可信度元数据** - 系统通知和日志会记录事件 ID、事件类型、优先级和触发依据，便于回溯与排障
-
-### 定时报告（Cron 驱动）
-
-- **每日简报** - 每天早上推送天气预报 + 昨日驾驶汇总
-- **周报** - 每周一推送本周驾驶统计
-- **月报** - 每月1日推送上月驾驶统计
-
+- **行程总结与智能点评** - 自动推送起终点、里程、能耗、驾驶评分、行程点评和关键因素
+- **充电状态通知** - 推送充入电量、峰值功率、AC/DC 类型和充电效率，并提醒断电或提前停止
+- **哨兵模式通知** - 实时推送哨兵模式激活、关闭和录制事件
+- **离车安全提醒** - 离车后检测未锁车、门窗、前后备箱及充电口未关闭
+- **胎压异常提醒** - 根据 TeslaMate 数据推送异常轮位和胎压
+- **每日、每周与每月报告** - 汇总天气、驾驶里程、能耗和使用趋势
+- **高德地图增强** - 可选启用中文地址、天气和行程路况分析
+- **可靠性保障** - 提供弱网行程补偿、MQTT 数据新鲜度监控、启动自检和事件去重
 
 ## 快速开始
 
@@ -102,6 +72,27 @@ docker network ls
 
 先从容器列表里找到 TeslaMate 相关容器，再从网络列表里找到对应的 `xxx_default` 网络名称。
 把独立模板里的 `teslamate_default` 改成实际网络名即可。
+</details>
+
+## 📸 推送示例
+<p align="center">
+  <a href=".github/assets/notify-featured.jpg">
+    <img src=".github/assets/notify-featured.jpg" alt="推送示例">
+  </a>
+</p>
+
+<details>
+  <summary>展开查看全部示例</summary>
+  <table>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="日报与行程结束示例"></td>
+      <td width="50%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="哨兵通知示例"></td>
+    </tr>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-charging-complete.jpg" alt="充电完成示例"></td>
+      <td width="50%"><img src=".github/assets/notify-charging-alerts.jpg" alt="充电异常示例"></td>
+    </tr>
+  </table>
 </details>
 
 ## 配置说明

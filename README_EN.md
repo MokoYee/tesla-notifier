@@ -10,45 +10,16 @@
 
 An iPhone notification companion powered by TeslaMate data, delivering trip, charging, sentry, and safety alerts in real time so you can stay on top of your vehicle.
 
-## 📸 Notification Examples
-<p align="center">
-  <a href=".github/assets/notify-featured.jpg">
-    <img src=".github/assets/notify-featured.jpg" alt="Notification examples">
-  </a>
-</p>
+## Core Features
 
-<details>
-  <summary>View all examples</summary>
-  <table>
-    <tr>
-      <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="Daily briefing and trip summary example"></td>
-      <td width="50%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="Sentry notification example"></td>
-    </tr>
-    <tr>
-      <td width="50%"><img src=".github/assets/notify-charging-complete.jpg" alt="Charging complete example"></td>
-      <td width="50%"><img src=".github/assets/notify-charging-alerts.jpg" alt="Charging alerts example"></td>
-    </tr>
-  </table>
-</details>
-
-## Features
-
-### Real-time Notifications (MQTT-driven)
-
-- **Trip Summary** - Automatic push after each trip (origin/destination, distance, energy consumption, 100-point driving score, local trip commentary)
-- **Charging Complete** - Push notification when charging finishes (energy added, peak power, AC/DC type, charging efficiency)
-- **Sentry Mode** - Notifications when sentry mode activates/deactivates, plus realtime recording event alerts
-- **Departure Safety Alert** - Detects unlocked car, open windows/doors, open trunks, or an open charge port after leaving the vehicle
-- **Tire Pressure Alert** - Realtime tire pressure warning based on TeslaMate `tpms_soft_warning_*`
-- **Charging Issue Alert** - Detects `NoPower` or charging stopped early before reaching the target SoC
-- **Traffic-aware Trip Analysis** - Optional Amap traffic sampling during a drive, merged into trip scoring and commentary
-- **Notification Trust Metadata** - System notifications and logs include event IDs, event type, priority, and trigger reasons for easier troubleshooting
-
-### Scheduled Reports (Cron-driven)
-
-- **Daily Briefing** - Morning push with weather forecast + yesterday's driving summary
-- **Weekly Report** - Every Monday with weekly driving statistics
-- **Monthly Report** - On the 1st of each month with last month's statistics
+- **Trip Summaries and Smart Commentary** - Origin, destination, distance, energy use, driving score, commentary, and key factors
+- **Charging Notifications** - Energy added, peak power, AC/DC type, efficiency, power loss, and early-stop alerts
+- **Sentry Mode Notifications** - Realtime alerts for sentry activation, deactivation, and recording events
+- **Departure Safety Alerts** - Detects an unlocked car or open windows, doors, trunks, and charge port after departure
+- **Tire Pressure Alerts** - Reports affected wheel positions and tire pressure from TeslaMate data
+- **Daily, Weekly, and Monthly Reports** - Summarizes weather, driving distance, energy use, and usage trends
+- **Amap Enhancements** - Optional Chinese addresses, weather, and traffic-aware trip analysis
+- **Reliability Safeguards** - Weak-network trip recovery, MQTT freshness monitoring, startup checks, and event deduplication
 
 ## Quick Start
 
@@ -101,6 +72,27 @@ docker network ls
 
 First identify the TeslaMate-related container from the container list, then find the matching `xxx_default` network in the network list.
 Replace `teslamate_default` in the standalone template with the actual network name.
+</details>
+
+## 📸 Notification Examples
+<p align="center">
+  <a href=".github/assets/notify-featured.jpg">
+    <img src=".github/assets/notify-featured.jpg" alt="Notification examples">
+  </a>
+</p>
+
+<details>
+  <summary>View all examples</summary>
+  <table>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-trip-and-daily.jpg" alt="Daily briefing and trip summary example"></td>
+      <td width="50%"><img src=".github/assets/notify-sentry-cycle.jpg" alt="Sentry notification example"></td>
+    </tr>
+    <tr>
+      <td width="50%"><img src=".github/assets/notify-charging-complete.jpg" alt="Charging complete example"></td>
+      <td width="50%"><img src=".github/assets/notify-charging-alerts.jpg" alt="Charging alerts example"></td>
+    </tr>
+  </table>
 </details>
 
 ## Configuration
